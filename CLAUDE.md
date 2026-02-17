@@ -56,6 +56,7 @@ GestureKeys/
     ├── CheatSheetView.swift             # 바로가기 참조 윈도우
     ├── GestureMonitorView.swift         # 제스처 테스트 모드
     ├── GestureHUD.swift                 # 제스처 인식 HUD 표시
+    ├── ScreenBlackout.swift             # 화면 끄기 (검은 오버레이 + 투명 커서)
     ├── KeyCaptureView.swift             # 사용자 지정 키 캡처
     │
     ├── ThreeFingerClickRecognizer.swift  # 3손가락 클릭 → 탭 닫기 ★최우선
@@ -70,7 +71,7 @@ GestureKeys/
     ├── FourFingerDoubleTapRecognizer.swift   # 4손가락 더블탭 → 스크린샷
     ├── FourFingerLongPressRecognizer.swift   # 4손가락 길게 → 화면캡처UI
     ├── FiveFingerTapRecognizer.swift         # 5손가락 탭 → 잠금화면
-    ├── FiveFingerLongPressRecognizer.swift   # 5손가락 길게 → 강제 종료
+    ├── FiveFingerLongPressRecognizer.swift   # 5손가락 길게 → 화면 끄기
     ├── OneFingerHoldTapRecognizer.swift      # 1홀드 + 탭 → 이전/다음 탭
     ├── OneFingerHoldSwipeRecognizer.swift    # 1홀드 + 스와이프 → 볼륨/밝기
     ├── TwoFingerSwipeRecognizer.swift        # 2손가락 스와이프 → 뒤로/앞으로
@@ -195,7 +196,23 @@ final class XxxRecognizer {
 | fourFingerLongPress | 4손가락 길게 | 화면캡처 (⇧⌘5) | OFF |
 | fiveFingerTap | 5손가락 탭 | 잠금화면 (⌃⌘Q) | OFF |
 | fiveFingerClick | 5손가락 클릭 | 앱 종료 (⌘Q) | OFF |
-| fiveFingerLongPress | 5손가락 길게 | 강제 종료 (⌥⌘Esc) | OFF |
+| fiveFingerLongPress | 5손가락 길게 | 화면 끄기 | OFF |
+
+## ScreenBlackout (화면 끄기)
+
+잠금화면/시스템 슬립 없이 화면만 검게 덮는 오버레이 방식:
+
+- **구현**: 모든 모니터에 `CGShieldingWindowLevel` 검은 NSWindow 생성
+- **커서 숨김**: 1x1 투명 NSImage로 만든 NSCursor를 `resetCursorRects`/`set()`으로 적용 + `CGDisplayHideCursor` 백업
+- **해제**: 로컬(블랙아웃 윈도우 대상) + 글로벌(다른 앱) 이벤트 모니터 이중 등록으로 키보드/마우스 입력 시 즉시 복귀
+- **쿨다운**: 0.5초 (제스처 손가락 떼는 동작으로 즉시 해제 방지)
+- `pmset displaysleepnow`는 잠금화면을 트리거하므로 사용하지 않음
+
+## 설정 UI
+
+- `DisclosureGroup` 대신 커스텀 Button + `contentShape(Rectangle())`로 전체 헤더 영역 클릭 가능
+- `withAnimation(.easeInOut(duration: 0.2))` 빠른 펼침/접힘
+- 접힌 상태에서 카테고리별 활성 제스처 수 표시 (예: `3/8`)
 
 ## 성능 최적화
 
