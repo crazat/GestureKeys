@@ -10,6 +10,7 @@ struct SettingsView: View {
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var showingAppOverrides = false
     @State private var searchText = ""
+    @State private var expandedCategories: Set<String> = []
 
     private let permissionTimer = Timer.publish(every: 3, on: .main, in: .common).autoconnect()
 
@@ -333,8 +334,42 @@ struct SettingsView: View {
     }
 
     private func section(category: GestureConfig.Category) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            DisclosureGroup {
+        let isExpanded = expandedCategories.contains(category.id)
+        return VStack(alignment: .leading, spacing: 0) {
+            // Full-width tappable header
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    if isExpanded {
+                        expandedCategories.remove(category.id)
+                    } else {
+                        expandedCategories.insert(category.id)
+                    }
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.bold))
+                        .foregroundColor(.secondary)
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    Image(systemName: category.icon)
+                        .foregroundColor(.secondary)
+                        .font(.subheadline)
+                    Text(category.title)
+                        .font(.headline)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text("\(category.gestures.filter { config.uiIsEnabled($0.id) }.count)/\(category.gestures.count)")
+                        .font(.caption)
+                        .foregroundColor(Color(nsColor: .tertiaryLabelColor))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                Divider()
                 VStack(spacing: 0) {
                     ForEach(Array(category.gestures.enumerated()), id: \.element.id) { index, gesture in
                         gestureRow(gesture)
@@ -343,24 +378,14 @@ struct SettingsView: View {
                         }
                     }
                 }
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: category.icon)
-                        .foregroundColor(.secondary)
-                        .font(.subheadline)
-                    Text(category.title)
-                        .font(.headline)
-                        .foregroundColor(.secondary)
-                }
             }
-
-            .background(Color(nsColor: .controlBackgroundColor))
-            .cornerRadius(8)
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
-            )
         }
+        .background(Color(nsColor: .controlBackgroundColor))
+        .cornerRadius(8)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        )
     }
 
     private func gestureRow(_ gesture: GestureConfig.Info) -> some View {

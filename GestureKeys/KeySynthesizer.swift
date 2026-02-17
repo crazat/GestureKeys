@@ -39,6 +39,7 @@ enum KeySynthesizer {
         case playPause = "playPause"
         case forceQuit = "forceQuit"
         case terminateApp = "terminateApp"
+        case sleepDisplay = "sleepDisplay"
         case custom = "custom"
 
         var id: String { rawValue }
@@ -75,6 +76,7 @@ enum KeySynthesizer {
             case .playPause: return "재생/일시정지"
             case .forceQuit: return "강제 종료 (⌥⌘Esc)"
             case .terminateApp: return "앱 종료"
+            case .sleepDisplay: return "화면 끄기"
             case .custom: return "사용자 지정"
             }
         }
@@ -111,6 +113,7 @@ enum KeySynthesizer {
             case .playPause: postPlayPause()
             case .forceQuit: postForceQuit()
             case .terminateApp: terminateFrontmostApp()
+            case .sleepDisplay: postSleepDisplay()
             case .custom: break // handled separately with keyCode/flags
             }
         }
@@ -148,7 +151,7 @@ enum KeySynthesizer {
         "threeFingerSwipeLeft": .prevTab,
         "threeFingerSwipeUp": .pageTop,
         "threeFingerSwipeDown": .pageBottom,
-        "fiveFingerLongPress": .forceQuit,
+        "fiveFingerLongPress": .sleepDisplay,
     ]
 
     /// Execute a custom key combo stored in UserDefaults.
@@ -308,6 +311,12 @@ enum KeySynthesizer {
             task.arguments = ["-e", "tell application \"System Events\" to key code 53 using {command down, option down}"]
             try? task.run()
             task.waitUntilExit()
+        }
+    }
+
+    static func postSleepDisplay() {
+        DispatchQueue.main.async {
+            ScreenBlackout.shared.activate()
         }
     }
 

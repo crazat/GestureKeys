@@ -99,7 +99,7 @@ final class GestureConfig: ObservableObject {
                  howTo: "다섯 손가락을 동시에 트랙패드에 올렸다가 빠르게 떼세요. 0.4초 이내에 완료해야 합니다."),
             Info(id: "fiveFingerClick",      name: "다섯 손가락 클릭",           action: "앱 종료 (⌘Q)",               defaultEnabled: false,
                  howTo: "다섯 손가락을 트랙패드에 올린 뒤, 물리적으로 트랙패드를 꾹 눌러 클릭하세요."),
-            Info(id: "fiveFingerLongPress", name: "다섯 손가락 길게 누르기",     action: "강제 종료 (⌥⌘Esc)",          defaultEnabled: false,
+            Info(id: "fiveFingerLongPress", name: "다섯 손가락 길게 누르기",     action: "화면 끄기",                   defaultEnabled: false,
                  howTo: "다섯 손가락을 트랙패드에 올리고 0.5초 이상 움직이지 않고 유지하세요."),
         ]),
     ]
