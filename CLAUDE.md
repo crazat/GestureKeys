@@ -85,10 +85,12 @@ GestureKeys/
 MultitouchSupport.framework (private, @_silgen_name 바인딩)
   ↓  MTRegisterContactFrameCallback
 touchCallback() — @convention(c) 글로벌 함수
-  ↓  os_unfair_lock 보호
+  ↓  engineLock/engineInstance 안전 참조 (use-after-free 방지)
 GestureEngine.processTouches()
-  ↓  17개 인식기에 순차 전달 (우선순위 기반 reset 연쇄)
-KeySynthesizer — CGEvent 합성 후 .cghidEventTap으로 포스트
+  ↓  os_unfair_lock 보호 하에 17개 인식기 순차 전달
+  ↓  인식기가 fireAction() 호출 → pendingActions 배열에 버퍼링
+  ↓  takePendingActions() → os_unfair_lock_unlock
+KeySynthesizer — lock 해제 후 CGEvent 합성 실행 (지연 실행 패턴)
 ```
 
 ### CGEventTap (물리 클릭 가로채기)
@@ -111,9 +113,14 @@ KeySynthesizer — CGEvent 합성 후 .cghidEventTap으로 포스트
 ### 스레드 안전성
 
 - 멀티터치 콜백: 시스템 고우선순위 스레드에서 실행
-- `os_unfair_lock`으로 engine 인스턴스 접근 보호
-- `UserDefaults` 읽기는 atomic (인식기 콜백에서 안전)
+- `engineLock` (`os_unfair_lock`): engine 인스턴스 접근, 인식기 상태, 설정 캐시 읽기 보호
+- `engineInstance`: 글로벌 변수로 `engineLock` 보호. C 콜백에서 안전한 참조 획득 (refcon 대신 사용하여 shutdown 중 use-after-free 방지)
+- `synthesisLock`: `KeySynthesizer.lastSynthesisTimestamp` 보호 (CGEventTap 콜백 읽기 ↔ 키 합성 쓰기)
+- `enabledLock`: `GestureConfig.enabledCache` 보호 (터치 콜백 읽기 ↔ UI 쓰기)
+- `appOverridesLock`: 앱별 오버라이드 캐시 보호
+- **지연 실행 패턴**: `fireAction()`이 `pendingActions`에 클로저 버퍼링 (engineLock 하), lock 해제 후 실행. CGEvent 포스팅이 lock 밖에서 실행되어 lock 점유 시간 최소화
 - UI 쓰기는 메인 스레드 (@Published + SwiftUI)
+- `cachedHudEnabled`/`cachedHapticEnabled`/`actionCache`: 인메모리 캐시로 UserDefaults I/O 제거
 
 ## 제스처 인식기 패턴
 
@@ -190,6 +197,26 @@ final class XxxRecognizer {
 | fiveFingerClick | 5손가락 클릭 | 앱 종료 (⌘Q) | OFF |
 | fiveFingerLongPress | 5손가락 길게 | 강제 종료 (⌥⌘Esc) | OFF |
 
+## 성능 최적화
+
+### Hot Path (60Hz+ 터치 프레임)
+- `UnsafeBufferPointer.filter`: C 버퍼에서 직접 필터링 (Array 할당 1회, 기존 2회)
+- 카운팅 루프: `.filter{}.count` 대신 수동 카운팅 (heap 할당 제거)
+- `removeAll(keepingCapacity: true)`: Dictionary/Array/Set 백킹 스토리지 재사용 (COW 최적화)
+- 설정 캐시: `actionCache`, `enabledCache`, `cachedHudEnabled`/`cachedHapticEnabled` 등 인메모리 캐시로 UserDefaults I/O 완전 제거
+- 지연 실행: CGEvent 포스팅, HUD 표시, 햅틱 피드백을 lock 밖으로 이동
+
+### 메모리
+- `Unmanaged.passUnretained(event)`: CGEvent 참조 카운트 누수 방지 (passRetained 대신)
+- GestureHUD: NSView/NSTextField 재사용 (매 제스처마다 재생성 제거)
+
+### 안정성
+- `engineLock`/`engineInstance` 패턴: refcon 포인터 대신 안전한 글로벌 참조 (shutdown 중 use-after-free 방지)
+- `synthesisLock`: `lastSynthesisTimestamp` data race 제거
+- `guard let` 바인딩: force unwrap 제거 (OneFingerHoldTap/SwipeRecognizer)
+- reEnableEventTap NSLog 5초 쓰로틀: 반복 비활성화 시 로그 폭주 방지
+- ThreeFingerLongPress: 4손가락 이상 시 즉시 리셋 (기존 5손가락 이상)
+
 ## 새 제스처 추가 절차
 
 1. `XxxRecognizer.swift` 생성 — 상태 머신 패턴 따름
@@ -239,3 +266,8 @@ DispatchQueue.global(qos: .userInitiated).async {
 
 - **MultitouchSupport.framework** (Apple private) — `@_silgen_name` 바인딩
 - 외부 라이브러리 없음 (순수 네이티브)
+
+## 개발 참고
+
+- **SourceKit 진단 오류**: `@_silgen_name`으로 바인딩된 private framework 심볼은 SourceKit에서 "Cannot find in scope" 경고를 표시하지만, 실제 빌드는 정상 성공. 이 진단은 무시해도 안전.
+- **GitHub**: https://github.com/crazat/GestureKeys
