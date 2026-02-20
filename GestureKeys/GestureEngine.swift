@@ -43,6 +43,28 @@ private func eventTapCallback(
         return Unmanaged.passUnretained(event)
     }
 
+    // Shift + brightness key → keyboard backlight (no lock needed)
+    if type.rawValue == 14 {  // NX_SYSDEFINED
+        if event.flags.contains(.maskShift),
+           let nsEvent = NSEvent(cgEvent: event),
+           nsEvent.subtype.rawValue == 8 {  // special key event
+            let data1 = nsEvent.data1
+            let keyType = (data1 >> 16) & 0xFF
+            if keyType == 2 || keyType == 3 {  // brightness up/down
+                let isDown = (data1 & 0xFF00) == 0x0A00
+                if isDown {
+                    if keyType == 2 {
+                        KeySynthesizer.postKbBrightnessUp()
+                    } else {
+                        KeySynthesizer.postKbBrightnessDown()
+                    }
+                }
+                return nil  // consume both down and up
+            }
+        }
+        return Unmanaged.passUnretained(event)
+    }
+
     // Safe engine reference via engineLock (avoids use-after-free during shutdown)
     os_unfair_lock_lock(&engineLock)
     guard let engine = engineInstance else {
@@ -85,6 +107,11 @@ private func eventTapCallback(
 
     // 5-finger click has highest priority (most fingers, least ambiguous)
     shouldSuppress = engine.fiveFingerClickRecognizer.handlePhysicalClick()
+    if shouldSuppress {
+        // 5FC consumed the click — reset competing 5-finger recognizers
+        engine.fiveFingerTapRecognizer.reset()
+        engine.fiveFingerLongPressRecognizer.reset()
+    }
 
     // 4-finger click (no conflict with other gestures)
     if !shouldSuppress {
@@ -386,12 +413,22 @@ final class GestureEngine {
 
         // 5-finger gestures (skip when all idle and below finger threshold)
         if activeCount >= 5 || fiveFingerTapRecognizer.state != .idle || fiveFingerLongPressRecognizer.state != .idle {
-            fiveFingerTapRecognizer.processTouches(activeTouches, timestamp: timestamp)
+            let tapFired = fiveFingerTapRecognizer.processTouches(activeTouches, timestamp: timestamp)
             fiveFingerLongPressRecognizer.processTouches(activeTouches, timestamp: timestamp)
-            // When long press fires, reset tap recognizer
+            // Mutual exclusion: whichever fires first resets the others
+            if tapFired {
+                fiveFingerClickRecognizer.reset()
+                fiveFingerLongPressRecognizer.reset()
+            }
             if fiveFingerLongPressRecognizer.state == .fired {
                 fiveFingerTapRecognizer.reset()
+                fiveFingerClickRecognizer.reset()
             }
+        }
+
+        // Deferred display sleep: execute after fingers lift to prevent trackpad wake
+        if fiveFingerLongPressRecognizer.consumeLiftEvent() {
+            KeySynthesizer.pendingActions.append { KeySynthesizer.postSleepDisplay() }
         }
 
         // 1-finger hold + tap / swipe: suppress peripheral/palm touches during wider typing window
@@ -471,7 +508,8 @@ final class GestureEngine {
             eventsOfInterest: CGEventMask(
                 (1 << CGEventType.leftMouseDown.rawValue) |
                 (1 << CGEventType.keyDown.rawValue) |
-                (1 << CGEventType.flagsChanged.rawValue)
+                (1 << CGEventType.flagsChanged.rawValue) |
+                (1 << 14)  // NX_SYSDEFINED — media/brightness keys
             ),
             callback: eventTapCallback,
             userInfo: nil

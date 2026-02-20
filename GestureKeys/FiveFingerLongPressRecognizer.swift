@@ -13,6 +13,9 @@ final class FiveFingerLongPressRecognizer {
 
     private(set) var state: State = .idle
 
+    /// True when fingers lifted after a sleepDisplay fire; consumed by GestureEngine.
+    private(set) var liftedAfterFire = false
+
     private var longPressDuration: TimeInterval { GestureConfig.shared.effectiveLongPressDuration(base: 0.500) }
     private var moveThreshold: Float { GestureConfig.shared.effectiveMoveThreshold(base: 0.03) }
     private let gracePeriod: TimeInterval = 0.080
@@ -22,8 +25,16 @@ final class FiveFingerLongPressRecognizer {
     private var dropTime: TimeInterval = 0
     private var firedTime: TimeInterval = 0
     private var initialPositions: [Int32: (x: Float, y: Float)] = [:]
+    private var deferredSleep = false
 
     var isActive: Bool { state != .idle }
+
+    /// Atomically consumes the lift event. Returns true once after fingers lift from a deferred sleep.
+    func consumeLiftEvent() -> Bool {
+        guard liftedAfterFire else { return false }
+        liftedAfterFire = false
+        return true
+    }
 
     @discardableResult
     func processTouches(_ activeTouches: [MTTouch], timestamp: TimeInterval) -> Bool {
@@ -56,7 +67,13 @@ final class FiveFingerLongPressRecognizer {
             if timestamp - pressStartTime >= longPressDuration {
                 var didFire = false
                 if GestureConfig.shared.isEnabled("fiveFingerLongPress") {
-                    KeySynthesizer.fireAction(gestureId: "fiveFingerLongPress")
+                    if GestureConfig.shared.actionFor("fiveFingerLongPress") == .sleepDisplay {
+                        // Defer sleep to finger lift; fire HUD/haptic only
+                        KeySynthesizer.fireAction(gestureId: "fiveFingerLongPress", action: {})
+                        deferredSleep = true
+                    } else {
+                        KeySynthesizer.fireAction(gestureId: "fiveFingerLongPress")
+                    }
                     didFire = true
                 }
                 state = .fired
@@ -66,13 +83,21 @@ final class FiveFingerLongPressRecognizer {
             return false
 
         case .fired:
-            if activeCount == 0 || timestamp - firedTime > firedTimeout { state = .idle }
+            if activeCount == 0 {
+                if deferredSleep { liftedAfterFire = true; deferredSleep = false }
+                state = .idle
+            } else if timestamp - firedTime > firedTimeout {
+                deferredSleep = false
+                state = .idle
+            }
             return false
         }
     }
 
     func reset() {
         state = .idle
+        liftedAfterFire = false
+        deferredSleep = false
         initialPositions.removeAll(keepingCapacity: true)
         dropTime = 0
         pressStartTime = 0

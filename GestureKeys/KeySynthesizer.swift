@@ -40,6 +40,8 @@ enum KeySynthesizer {
         case forceQuit = "forceQuit"
         case terminateApp = "terminateApp"
         case sleepDisplay = "sleepDisplay"
+        case kbBrightnessUp = "kbBrightnessUp"
+        case kbBrightnessDown = "kbBrightnessDown"
         case custom = "custom"
 
         var id: String { rawValue }
@@ -77,6 +79,8 @@ enum KeySynthesizer {
             case .forceQuit: return "강제 종료 (⌥⌘Esc)"
             case .terminateApp: return "앱 종료"
             case .sleepDisplay: return "화면 끄기"
+            case .kbBrightnessUp: return "키보드 백라이트 증가"
+            case .kbBrightnessDown: return "키보드 백라이트 감소"
             case .custom: return "사용자 지정"
             }
         }
@@ -114,6 +118,8 @@ enum KeySynthesizer {
             case .forceQuit: postForceQuit()
             case .terminateApp: terminateFrontmostApp()
             case .sleepDisplay: postSleepDisplay()
+            case .kbBrightnessUp: postKbBrightnessUp()
+            case .kbBrightnessDown: postKbBrightnessDown()
             case .custom: break // handled separately with keyCode/flags
             }
         }
@@ -261,7 +267,7 @@ enum KeySynthesizer {
 
     // MARK: - App Actions
 
-    /// Terminates the frontmost application by sending ⌘Q (silent, graceful quit).
+    /// Terminates the frontmost application via Apple Events (bypasses Chrome's "Hold ⌘Q" UI).
     static func terminateFrontmostApp() {
         guard let frontApp = NSWorkspace.shared.frontmostApplication else {
             NSLog("GestureKeys: No frontmost application")
@@ -275,7 +281,7 @@ enum KeySynthesizer {
         }
 
         NSLog("GestureKeys: Terminating %@", frontApp.localizedName ?? "unknown")
-        postKeyCombo(keyCode: kVK_ANSI_Q, flags: .maskCommand)
+        frontApp.terminate()
     }
 
     // MARK: - Key Combos (existing)
@@ -315,8 +321,12 @@ enum KeySynthesizer {
     }
 
     static func postSleepDisplay() {
-        DispatchQueue.main.async {
-            ScreenBlackout.shared.activate()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/pmset")
+            task.arguments = ["displaysleepnow"]
+            try? task.run()
+            task.waitUntilExit()
         }
     }
 
@@ -334,8 +344,10 @@ enum KeySynthesizer {
     static func postPlayPause()    { postSystemKey(16) }  // NX_KEYTYPE_PLAY
     static func postVolumeUp()     { postSystemKey(0) }   // NX_KEYTYPE_SOUND_UP
     static func postVolumeDown()   { postSystemKey(1) }   // NX_KEYTYPE_SOUND_DOWN
-    static func postBrightnessUp() { postSystemKey(2) }   // NX_KEYTYPE_BRIGHTNESS_UP
-    static func postBrightnessDown(){ postSystemKey(3) }  // NX_KEYTYPE_BRIGHTNESS_DOWN
+    static func postBrightnessUp()    { postSystemKey(2) }   // NX_KEYTYPE_BRIGHTNESS_UP
+    static func postBrightnessDown()  { postSystemKey(3) }   // NX_KEYTYPE_BRIGHTNESS_DOWN
+    static func postKbBrightnessUp()  { postSystemKey(21) }  // NX_KEYTYPE_ILLUMINATION_UP
+    static func postKbBrightnessDown(){ postSystemKey(22) }  // NX_KEYTYPE_ILLUMINATION_DOWN
 
     // MARK: - Synthesis Timestamp (for palm rejection)
 
