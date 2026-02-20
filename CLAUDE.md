@@ -46,7 +46,7 @@ GestureKeys/
     │
     ├── GestureEngine.swift              # 터치 처리 허브 (17개 인식기 관리)
     ├── GestureConfig.swift              # 제스처 활성화/비활성화 (UserDefaults)
-    ├── KeySynthesizer.swift             # CGEvent 키 합성 + 시스템 키 + osascript
+    ├── KeySynthesizer.swift             # CGEvent 키 합성 + 시스템 키 + osascript + pmset
     ├── MultitouchBindings.swift         # MultitouchSupport.framework 바인딩
     ├── TouchModels.swift                # MTTouch 구조체 (96 bytes)
     │
@@ -56,7 +56,7 @@ GestureKeys/
     ├── CheatSheetView.swift             # 바로가기 참조 윈도우
     ├── GestureMonitorView.swift         # 제스처 테스트 모드
     ├── GestureHUD.swift                 # 제스처 인식 HUD 표시
-    ├── ScreenBlackout.swift             # 화면 끄기 (검은 오버레이 + 투명 커서)
+    ├── ScreenBlackout.swift             # 화면 끄기 (검은 오버레이, 현재 미사용)
     ├── KeyCaptureView.swift             # 사용자 지정 키 캡처
     │
     ├── ThreeFingerClickRecognizer.swift  # 3손가락 클릭 → 탭 닫기 ★최우선
@@ -71,7 +71,7 @@ GestureKeys/
     ├── FourFingerDoubleTapRecognizer.swift   # 4손가락 더블탭 → 스크린샷
     ├── FourFingerLongPressRecognizer.swift   # 4손가락 길게 → 화면캡처UI
     ├── FiveFingerTapRecognizer.swift         # 5손가락 탭 → 잠금화면
-    ├── FiveFingerLongPressRecognizer.swift   # 5손가락 길게 → 화면 끄기
+    ├── FiveFingerLongPressRecognizer.swift   # 5손가락 길게 → 화면 끄기 (deferred sleep)
     ├── OneFingerHoldTapRecognizer.swift      # 1홀드 + 탭 → 이전/다음 탭
     ├── OneFingerHoldSwipeRecognizer.swift    # 1홀드 + 스와이프 → 볼륨/밝기
     ├── TwoFingerSwipeRecognizer.swift        # 2손가락 스와이프 → 뒤로/앞으로
@@ -94,11 +94,13 @@ GestureEngine.processTouches()
 KeySynthesizer — lock 해제 후 CGEvent 합성 실행 (지연 실행 패턴)
 ```
 
-### CGEventTap (물리 클릭 가로채기)
+### CGEventTap (물리 클릭 + 시스템 키 가로채기)
 
 - `.leftMouseDown` 이벤트를 `.cghidEventTap` 레벨에서 인터셉트
+- `NX_SYSDEFINED` (미디어/밝기 키) 인터셉트: Shift+밝기 키 → 키보드 백라이트 변환
 - 3/4/5손가락 클릭 시 `nil` 반환으로 시스템 클릭 억제
 - 우선순위: 5FC > 4FC > **3FC (최우선, 다른 3손가락 제스처에 의해 차단되지 않음)**
+- 5FC 발동 시 5FT, 5FLP 리셋
 - 3FC 발동 시 경쟁 인식기 전부 리셋 (TWH, SWH, LPWH, 3FDT, 3FLP, 3FSwipe)
 
 ### 제스처 우선순위 & 충돌 해소 (processTouches 순서)
@@ -107,7 +109,7 @@ KeySynthesizer — lock 해제 후 CGEvent 합성 실행 (지연 실행 패턴)
 2. 2홀드+탭 → 2홀드+스와이프 (발동 시 TWH/LPWH reset) → 2홀드+길게 (발동 시 TWH/SWH reset)
 3. 3손가락 제스처 (스와이프 발동 시 3FDT/3FLP reset, **3FC는 리셋하지 않음**)
 4. 4손가락 제스처 (독립 처리)
-5. 5손가락 제스처 (길게 발동 시 탭 reset)
+5. 5손가락 제스처 (탭 발동 시 5FC/5FLP reset, 길게 발동 시 5FT/5FC reset)
 6. 1홀드+탭 → 1홀드+스와이프 (발동 시 OFHT reset)
 7. 2손가락 스와이프 (발동 시 OFHT/OFHS/TFTR reset) → 2손가락 탭
 
@@ -195,18 +197,18 @@ final class XxxRecognizer {
 | fourFingerDoubleTap | 4손가락 더블탭 | 스크린샷 (⇧⌘4) | OFF |
 | fourFingerLongPress | 4손가락 길게 | 화면캡처 (⇧⌘5) | OFF |
 | fiveFingerTap | 5손가락 탭 | 잠금화면 (⌃⌘Q) | OFF |
-| fiveFingerClick | 5손가락 클릭 | 앱 종료 (⌘Q) | OFF |
+| fiveFingerClick | 5손가락 클릭 | 앱 종료 | OFF |
 | fiveFingerLongPress | 5손가락 길게 | 화면 끄기 | OFF |
 
-## ScreenBlackout (화면 끄기)
+## 화면 끄기 (Display Sleep)
 
-잠금화면/시스템 슬립 없이 화면만 검게 덮는 오버레이 방식:
+`pmset displaysleepnow`로 실제 디스플레이 슬립 실행:
 
-- **구현**: 모든 모니터에 `CGShieldingWindowLevel` 검은 NSWindow 생성
-- **커서 숨김**: 1x1 투명 NSImage로 만든 NSCursor를 `resetCursorRects`/`set()`으로 적용 + `CGDisplayHideCursor` 백업
-- **해제**: 로컬(블랙아웃 윈도우 대상) + 글로벌(다른 앱) 이벤트 모니터 이중 등록으로 키보드/마우스 입력 시 즉시 복귀
-- **쿨다운**: 0.5초 (제스처 손가락 떼는 동작으로 즉시 해제 방지)
-- `pmset displaysleepnow`는 잠금화면을 트리거하므로 사용하지 않음
+- **구현**: `Process`로 `/usr/bin/pmset displaysleepnow` 실행 (백그라운드 스레드)
+- **지연 실행**: 제스처 인식 시 HUD/햅틱만 즉시 피드백, 실제 슬립은 손가락을 뗀 후 실행 (트랙패드 터치-업이 디스플레이를 다시 깨우는 것 방지)
+- **동작**: `FiveFingerLongPressRecognizer`가 `sleepDisplay` 액션일 때 `deferredSleep` 플래그 설정 → 손가락 리프트 시 `liftedAfterFire` → `GestureEngine`이 `consumeLiftEvent()`로 감지 후 슬립 실행
+- **참고**: 잠금화면 설정에 따라 디스플레이 깨울 때 비밀번호를 요구할 수 있음
+- **이전 방식**: `ScreenBlackout.swift`의 검은 오버레이 방식은 화면 보호기가 개입하는 문제로 대체됨 (코드는 보존)
 
 ## 설정 UI
 
