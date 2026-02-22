@@ -19,11 +19,8 @@ final class FiveFingerLongPressRecognizer {
     private var longPressDuration: TimeInterval { GestureConfig.shared.effectiveLongPressDuration(base: 0.500) }
     private var moveThreshold: Float { GestureConfig.shared.effectiveMoveThreshold(base: 0.03) }
     private let gracePeriod: TimeInterval = 0.080
-    private let firedTimeout: TimeInterval = 5.0
-
     private var pressStartTime: TimeInterval = 0
     private var dropTime: TimeInterval = 0
-    private var firedTime: TimeInterval = 0
     private var initialPositions: [Int32: (x: Float, y: Float)] = [:]
     private var deferredSleep = false
 
@@ -77,7 +74,6 @@ final class FiveFingerLongPressRecognizer {
                     didFire = true
                 }
                 state = .fired
-                firedTime = timestamp
                 return didFire
             }
             return false
@@ -85,9 +81,6 @@ final class FiveFingerLongPressRecognizer {
         case .fired:
             if activeCount == 0 {
                 if deferredSleep { liftedAfterFire = true; deferredSleep = false }
-                state = .idle
-            } else if timestamp - firedTime > firedTimeout {
-                deferredSleep = false
                 state = .idle
             }
             return false
@@ -101,7 +94,6 @@ final class FiveFingerLongPressRecognizer {
         initialPositions.removeAll(keepingCapacity: true)
         dropTime = 0
         pressStartTime = 0
-        firedTime = 0
     }
 
     private func hasExcessiveMovement(_ activeTouches: [MTTouch]) -> Bool {

@@ -307,7 +307,9 @@ final class GestureEngine {
         let activeTouches = UnsafeBufferPointer(start: touchPtr, count: count).filter { $0.touchState.isActive }
         let activeCount = activeTouches.count
 
-        // Update monitor if in test mode
+        // Note: monitorMode is read without engineLock intentionally.
+        // Bool read/write is atomic on ARM64. Worst case: 1-2 frames of
+        // data missed during monitor mode transition — functionally harmless.
         if Self.monitorMode {
             GestureMonitor.shared.updateTouchCount(activeCount)
             GestureMonitor.shared.logTouchSizes(activeTouches)

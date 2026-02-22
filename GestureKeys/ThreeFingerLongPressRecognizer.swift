@@ -25,11 +25,8 @@ final class ThreeFingerLongPressRecognizer {
     private var longPressDuration: TimeInterval { GestureConfig.shared.effectiveLongPressDuration(base: 0.500) }
     private var moveThreshold: Float { GestureConfig.shared.effectiveMoveThreshold(base: 0.03) }
     private let gracePeriod: TimeInterval = 0.080
-    private let firedTimeout: TimeInterval = 5.0
-
     private var pressStartTime: TimeInterval = 0
     private var dropTime: TimeInterval = 0
-    private var firedTime: TimeInterval = 0
     private var initialPositions: [Int32: (x: Float, y: Float)] = [:]
 
     var isActive: Bool {
@@ -74,15 +71,12 @@ final class ThreeFingerLongPressRecognizer {
                     didFire = true
                 }
                 state = .fired
-                firedTime = timestamp
                 return didFire
             }
             return false
 
         case .fired:
-            if activeCount == 0 || timestamp - firedTime > firedTimeout {
-                state = .idle
-            }
+            if activeCount == 0 { state = .idle }
             return false
         }
     }
@@ -92,7 +86,6 @@ final class ThreeFingerLongPressRecognizer {
         initialPositions.removeAll(keepingCapacity: true)
         pressStartTime = 0
         dropTime = 0
-        firedTime = 0
     }
 
     // MARK: - Private

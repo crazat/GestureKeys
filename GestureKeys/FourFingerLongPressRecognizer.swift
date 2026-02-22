@@ -16,11 +16,8 @@ final class FourFingerLongPressRecognizer {
     private var longPressDuration: TimeInterval { GestureConfig.shared.effectiveLongPressDuration(base: 0.500) }
     private var moveThreshold: Float { GestureConfig.shared.effectiveMoveThreshold(base: 0.03) }
     private let gracePeriod: TimeInterval = 0.080
-    private let firedTimeout: TimeInterval = 5.0
-
     private var pressStartTime: TimeInterval = 0
     private var dropTime: TimeInterval = 0
-    private var firedTime: TimeInterval = 0
     private var initialPositions: [Int32: (x: Float, y: Float)] = [:]
 
     var isActive: Bool { state != .idle }
@@ -60,13 +57,12 @@ final class FourFingerLongPressRecognizer {
                     didFire = true
                 }
                 state = .fired
-                firedTime = timestamp
                 return didFire
             }
             return false
 
         case .fired:
-            if activeCount == 0 || timestamp - firedTime > firedTimeout { state = .idle }
+            if activeCount == 0 { state = .idle }
             return false
         }
     }
@@ -76,7 +72,6 @@ final class FourFingerLongPressRecognizer {
         initialPositions.removeAll(keepingCapacity: true)
         dropTime = 0
         pressStartTime = 0
-        firedTime = 0
     }
 
     private func hasExcessiveMovement(_ activeTouches: [MTTouch]) -> Bool {

@@ -56,7 +56,6 @@ GestureKeys/
     ├── CheatSheetView.swift             # 바로가기 참조 윈도우
     ├── GestureMonitorView.swift         # 제스처 테스트 모드
     ├── GestureHUD.swift                 # 제스처 인식 HUD 표시
-    ├── ScreenBlackout.swift             # 화면 끄기 (검은 오버레이, 현재 미사용)
     ├── KeyCaptureView.swift             # 사용자 지정 키 캡처
     │
     ├── ThreeFingerClickRecognizer.swift  # 3손가락 클릭 → 탭 닫기 ★최우선
@@ -208,7 +207,7 @@ final class XxxRecognizer {
 - **지연 실행**: 제스처 인식 시 HUD/햅틱만 즉시 피드백, 실제 슬립은 손가락을 뗀 후 실행 (트랙패드 터치-업이 디스플레이를 다시 깨우는 것 방지)
 - **동작**: `FiveFingerLongPressRecognizer`가 `sleepDisplay` 액션일 때 `deferredSleep` 플래그 설정 → 손가락 리프트 시 `liftedAfterFire` → `GestureEngine`이 `consumeLiftEvent()`로 감지 후 슬립 실행
 - **참고**: 잠금화면 설정에 따라 디스플레이 깨울 때 비밀번호를 요구할 수 있음
-- **이전 방식**: `ScreenBlackout.swift`의 검은 오버레이 방식은 화면 보호기가 개입하는 문제로 대체됨 (코드는 보존)
+- **이전 방식**: 검은 오버레이(`ScreenBlackout`) 방식은 화면 보호기가 개입하는 문제로 `pmset`으로 대체됨 (코드 삭제, git history에서 복원 가능)
 
 ## 설정 UI
 
