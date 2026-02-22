@@ -44,7 +44,7 @@ GestureKeys/
     ├── Info.plist
     ├── GestureKeys.entitlements
     │
-    ├── GestureEngine.swift              # 터치 처리 허브 (17개 인식기 관리)
+    ├── GestureEngine.swift              # 터치 처리 허브 (18개 인식기 관리)
     ├── GestureConfig.swift              # 제스처 활성화/비활성화 (UserDefaults)
     ├── KeySynthesizer.swift             # CGEvent 키 합성 + 시스템 키 + osascript + pmset
     ├── MultitouchBindings.swift         # MultitouchSupport.framework 바인딩
@@ -65,7 +65,8 @@ GestureKeys/
     ├── SwipeWhileHoldingRecognizer.swift # 2홀드 + 스와이프 → 탭 이동 등
     ├── LongPressWhileHoldingRecognizer.swift # 2홀드 + 길게 → 다시 실행/저장
     ├── ThreeFingerDoubleTapRecognizer.swift  # 3손가락 더블탭 → 붙여넣기
-    ├── ThreeFingerLongPressRecognizer.swift  # 3손가락 길게 → 실행취소
+    ├── ThreeFingerTripleTapRecognizer.swift  # 3손가락 트리플탭 → 실행취소
+    ├── ThreeFingerLongPressRecognizer.swift  # 3손가락 길게 → 복사
     ├── ThreeFingerSwipeRecognizer.swift      # 3손가락 스와이프 → 탭 전환/페이지
     ├── FourFingerDoubleTapRecognizer.swift   # 4손가락 더블탭 → 스크린샷
     ├── FourFingerLongPressRecognizer.swift   # 4손가락 길게 → 화면캡처UI
@@ -74,7 +75,7 @@ GestureKeys/
     ├── OneFingerHoldTapRecognizer.swift      # 1홀드 + 탭 → 이전/다음 탭
     ├── OneFingerHoldSwipeRecognizer.swift    # 1홀드 + 스와이프 → 볼륨/밝기
     ├── TwoFingerSwipeRecognizer.swift        # 2손가락 스와이프 → 뒤로/앞으로
-    └── TwoFingerTapRecognizer.swift          # 2손가락 더블탭 → 복사
+    └── TwoFingerTapRecognizer.swift          # 2손가락 더블탭 → 잘라내기
 ```
 
 ## 아키텍처
@@ -87,7 +88,7 @@ MultitouchSupport.framework (private, @_silgen_name 바인딩)
 touchCallback() — @convention(c) 글로벌 함수
   ↓  engineLock/engineInstance 안전 참조 (use-after-free 방지)
 GestureEngine.processTouches()
-  ↓  os_unfair_lock 보호 하에 17개 인식기 순차 전달
+  ↓  os_unfair_lock 보호 하에 18개 인식기 순차 전달
   ↓  인식기가 fireAction() 호출 → pendingActions 배열에 버퍼링
   ↓  takePendingActions() → os_unfair_lock_unlock
 KeySynthesizer — lock 해제 후 CGEvent 합성 실행 (지연 실행 패턴)
@@ -100,13 +101,13 @@ KeySynthesizer — lock 해제 후 CGEvent 합성 실행 (지연 실행 패턴)
 - 3/4/5손가락 클릭 시 `nil` 반환으로 시스템 클릭 억제
 - 우선순위: 5FC > 4FC > **3FC (최우선, 다른 3손가락 제스처에 의해 차단되지 않음)**
 - 5FC 발동 시 5FT, 5FLP 리셋
-- 3FC 발동 시 경쟁 인식기 전부 리셋 (TWH, SWH, LPWH, 3FDT, 3FLP, 3FSwipe)
+- 3FC 발동 시 경쟁 인식기 전부 리셋 (TWH, SWH, LPWH, 3FDT, 3FTT, 3FLP, 3FSwipe)
 
 ### 제스처 우선순위 & 충돌 해소 (processTouches 순서)
 
 1. 클릭 인식기 (CGEventTap 별도 처리, 3FC 최우선)
 2. 2홀드+탭 → 2홀드+스와이프 (발동 시 TWH/LPWH reset) → 2홀드+길게 (발동 시 TWH/SWH reset)
-3. 3손가락 제스처 (스와이프 발동 시 3FDT/3FLP reset, **3FC는 리셋하지 않음**)
+3. 3손가락 제스처 (스와이프 발동 시 3FDT/3FTT/3FLP reset, **3FC는 리셋하지 않음**)
 4. 4손가락 제스처 (독립 처리)
 5. 5손가락 제스처 (탭 발동 시 5FC/5FLP reset, 길게 발동 시 5FT/5FC reset)
 6. 1홀드+탭 → 1홀드+스와이프 (발동 시 OFHT reset)
@@ -180,9 +181,10 @@ final class XxxRecognizer {
 ### 편집
 | ID | 제스처 | 액션 | 기본값 |
 |----|--------|------|--------|
-| twoFingerDoubleTap | 2손가락 더블탭 | 복사 (⌘C) | ON |
+| twoFingerDoubleTap | 2손가락 더블탭 | 잘라내기 (⌘X) | ON |
 | threeFingerDoubleTap | 3손가락 더블탭 | 붙여넣기 (⌘V) | ON |
-| threeFingerLongPress | 3손가락 길게 누르기 | 실행취소 (⌘Z) | ON |
+| threeFingerLongPress | 3손가락 길게 누르기 | 복사 (⌘C) | ON |
+| threeFingerTripleTap | 3손가락 트리플탭 | 실행취소 (⌘Z) | ON |
 | twhLeftLongPress | 2홀드 + 왼쪽 길게 | 다시 실행 (⇧⌘Z) | OFF |
 | twhRightLongPress | 2홀드 + 오른쪽 길게 | 저장 (⌘S) | OFF |
 

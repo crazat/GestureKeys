@@ -44,7 +44,7 @@ final class FourFingerLongPressRecognizer {
                 else if timestamp - dropTime > gracePeriod { state = .idle }
                 return false
             }
-            if activeCount > 5 {
+            if activeCount > 4 {
                 state = .idle
                 return false
             }

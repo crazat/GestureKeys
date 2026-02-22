@@ -128,6 +128,7 @@ private func eventTapCallback(
             engine.swipeWhileHoldingRecognizer.reset()
             engine.longPressWhileHoldingRecognizer.reset()
             engine.threeFingerDoubleTapRecognizer.reset()
+            engine.threeFingerTripleTapRecognizer.reset()
             engine.threeFingerLongPressRecognizer.reset()
             engine.threeFingerSwipeRecognizer.reset()
         }
@@ -169,6 +170,7 @@ final class GestureEngine {
     let swipeWhileHoldingRecognizer = SwipeWhileHoldingRecognizer()
     let longPressWhileHoldingRecognizer = LongPressWhileHoldingRecognizer()
     let threeFingerDoubleTapRecognizer = ThreeFingerDoubleTapRecognizer()
+    let threeFingerTripleTapRecognizer = ThreeFingerTripleTapRecognizer()
     let threeFingerLongPressRecognizer = ThreeFingerLongPressRecognizer()
     let fourFingerDoubleTapRecognizer = FourFingerDoubleTapRecognizer()
     let fourFingerLongPressRecognizer = FourFingerLongPressRecognizer()
@@ -180,6 +182,12 @@ final class GestureEngine {
     let oneFingerHoldSwipeRecognizer = OneFingerHoldSwipeRecognizer()
     let twoFingerSwipeRecognizer = TwoFingerSwipeRecognizer()
     let twoFingerTapRecognizer = TwoFingerTapRecognizer()
+
+    /// Deferred double-tap work item (scheduled when triple-tap is enabled).
+    private var deferredDoubleTapItem: DispatchWorkItem?
+
+    /// Protected by engineLock — prevents deferred double-tap from firing after triple-tap.
+    private var deferredDoubleTapCancelled = false
 
     private var devices: [MTDeviceRef] = []
     private var eventTap: CFMachPort?
@@ -232,12 +240,15 @@ final class GestureEngine {
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         deviceRecoveryTimer?.invalidate()
         deviceRecoveryTimer = nil
+        deferredDoubleTapItem?.cancel()
+        deferredDoubleTapItem = nil
         // Order matters: remove event tap first so callbacks can't fire on stopped devices.
         removeEventTap()
         stopMultitouchDevices()
 
         os_unfair_lock_lock(&engineLock)
         engineInstance = nil
+        deferredDoubleTapCancelled = true
         resetAllRecognizers()
         os_unfair_lock_unlock(&engineLock)
 
@@ -255,6 +266,7 @@ final class GestureEngine {
         swipeWhileHoldingRecognizer.reset()
         longPressWhileHoldingRecognizer.reset()
         threeFingerDoubleTapRecognizer.reset()
+        threeFingerTripleTapRecognizer.reset()
         threeFingerLongPressRecognizer.reset()
         fourFingerDoubleTapRecognizer.reset()
         fourFingerLongPressRecognizer.reset()
@@ -314,6 +326,11 @@ final class GestureEngine {
             GestureMonitor.shared.updateTouchCount(activeCount)
             GestureMonitor.shared.logTouchSizes(activeTouches)
         }
+
+        // Deferred double-tap scheduling flags (set under lock, used after unlock)
+        var scheduleDeferred = false
+        var cancelDeferred = false
+        var deferDelay: TimeInterval = 0.4
 
         os_unfair_lock_lock(&engineLock)
 
@@ -389,17 +406,43 @@ final class GestureEngine {
 
         // 3-finger gestures (skip when all idle and below finger threshold)
         // 3FC (click) has highest priority — never reset by other 3-finger recognizers.
-        if activeCount >= 3 || threeFingerDoubleTapRecognizer.state != .idle || threeFingerLongPressRecognizer.state != .idle || threeFingerSwipeRecognizer.state != .idle {
+        if activeCount >= 3 || threeFingerDoubleTapRecognizer.state != .idle || threeFingerTripleTapRecognizer.state != .idle || threeFingerLongPressRecognizer.state != .idle || threeFingerSwipeRecognizer.state != .idle {
             let threeFingerSwipeFired = threeFingerSwipeRecognizer.processTouches(activeTouches, timestamp: timestamp)
             if threeFingerSwipeFired {
-                // Swipe resets double-tap and long-press, but NOT 3FC
+                // Swipe resets double-tap, triple-tap, and long-press, but NOT 3FC
                 threeFingerDoubleTapRecognizer.reset()
+                threeFingerTripleTapRecognizer.reset()
                 threeFingerLongPressRecognizer.reset()
             }
+
+            // Process triple tap BEFORE double tap (state used for double tap suppression)
+            let tripleTapFired = threeFingerTripleTapRecognizer.processTouches(activeTouches, timestamp: timestamp)
+
+            // Suppress double tap fire when triple tap is tracking between 2nd and 3rd tap
+            let tripleEnabled = config.isEnabled("threeFingerTripleTap")
+            threeFingerDoubleTapRecognizer.suppressFire = tripleEnabled && threeFingerTripleTapRecognizer.state == .secondTapUp
             threeFingerDoubleTapRecognizer.processTouches(activeTouches, timestamp: timestamp)
+            threeFingerDoubleTapRecognizer.suppressFire = false
+
+            // Deferred double tap: schedule delayed execution
+            if threeFingerDoubleTapRecognizer.didSuppressFire {
+                threeFingerDoubleTapRecognizer.didSuppressFire = false
+                deferredDoubleTapCancelled = false
+                scheduleDeferred = true
+                deferDelay = config.effectiveDoubleTapWindow
+            }
+
+            // Triple tap fired → cancel deferred double tap
+            if tripleTapFired {
+                deferredDoubleTapCancelled = true
+                cancelDeferred = true
+                threeFingerDoubleTapRecognizer.reset()
+            }
+
             threeFingerLongPressRecognizer.processTouches(activeTouches, timestamp: timestamp)
             if threeFingerLongPressRecognizer.state == .fired {
                 threeFingerDoubleTapRecognizer.reset()
+                threeFingerTripleTapRecognizer.reset()
                 threeFingerSwipeRecognizer.reset()
             }
         }
@@ -421,10 +464,12 @@ final class GestureEngine {
             if tapFired {
                 fiveFingerClickRecognizer.reset()
                 fiveFingerLongPressRecognizer.reset()
+                fourFingerLongPressRecognizer.reset()
             }
             if fiveFingerLongPressRecognizer.state == .fired {
                 fiveFingerTapRecognizer.reset()
                 fiveFingerClickRecognizer.reset()
+                fourFingerLongPressRecognizer.reset()
             }
         }
 
@@ -464,12 +509,37 @@ final class GestureEngine {
                 twoFingerTapRecognizer.reset()
             }
 
-            // 2-finger double tap (copy)
+            // 2-finger double tap (cut)
             twoFingerTapRecognizer.processTouches(activeTouches, timestamp: timestamp)
         }
         let pendingActions = KeySynthesizer.takePendingActions()
         os_unfair_lock_unlock(&engineLock)
         for action in pendingActions { action() }
+
+        // Deferred double-tap scheduling (outside lock)
+        if cancelDeferred {
+            deferredDoubleTapItem?.cancel()
+            deferredDoubleTapItem = nil
+        }
+        if scheduleDeferred {
+            deferredDoubleTapItem?.cancel()
+            let item = DispatchWorkItem { [weak self] in
+                os_unfair_lock_lock(&engineLock)
+                guard let self = self, engineInstance != nil, !self.deferredDoubleTapCancelled else {
+                    os_unfair_lock_unlock(&engineLock)
+                    return
+                }
+                self.deferredDoubleTapCancelled = true  // prevent re-firing
+                if GestureConfig.shared.isEnabled("threeFingerDoubleTap") {
+                    KeySynthesizer.fireAction(gestureId: "threeFingerDoubleTap")
+                }
+                let deferredActions = KeySynthesizer.takePendingActions()
+                os_unfair_lock_unlock(&engineLock)
+                for action in deferredActions { action() }
+            }
+            deferredDoubleTapItem = item
+            DispatchQueue.main.asyncAfter(deadline: .now() + deferDelay, execute: item)
+        }
     }
 
     // MARK: - Multitouch Device Management

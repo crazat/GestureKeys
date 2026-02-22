@@ -48,6 +48,13 @@ final class ThreeFingerDoubleTapRecognizer {
     /// Initial positions when three fingers landed
     private var initialPositions: [(pathIndex: Int32, x: Float, y: Float)] = []
 
+    /// When true, the recognizer will not fire on second tap lift (set by GestureEngine
+    /// when triple-tap is enabled and tracking, to allow deferred double-tap execution).
+    var suppressFire = false
+
+    /// Set to true when fire was suppressed; GestureEngine reads and clears this.
+    var didSuppressFire = false
+
     var isActive: Bool {
         state != .idle
     }
@@ -105,6 +112,11 @@ final class ThreeFingerDoubleTapRecognizer {
                 return false
             }
             if activeCount == 0 {
+                if suppressFire {
+                    didSuppressFire = true
+                    reset()
+                    return false
+                }
                 var didFire = false
                 if GestureConfig.shared.isEnabled("threeFingerDoubleTap") {
                     KeySynthesizer.fireAction(gestureId: "threeFingerDoubleTap")

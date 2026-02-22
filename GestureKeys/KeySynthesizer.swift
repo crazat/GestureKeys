@@ -27,6 +27,7 @@ enum KeySynthesizer {
         case lockScreen = "lockScreen"
         case copy = "copy"
         case paste = "paste"
+        case cut = "cut"
         case screenshot = "screenshot"
         case selectAll = "selectAll"
         case screenCapture = "screenCapture"
@@ -67,6 +68,7 @@ enum KeySynthesizer {
             case .lockScreen: return "잠금화면 (⌃⌘Q)"
             case .copy: return "복사 (⌘C)"
             case .paste: return "붙여넣기 (⌘V)"
+            case .cut: return "잘라내기 (⌘X)"
             case .screenshot: return "스크린샷 (⇧⌘4)"
             case .selectAll: return "전체 선택 (⌘A)"
             case .screenCapture: return "화면 캡처 (⇧⌘5)"
@@ -107,6 +109,7 @@ enum KeySynthesizer {
             case .lockScreen: postLockScreen()
             case .copy: postCopy()
             case .paste: postPaste()
+            case .cut: postCut()
             case .screenshot: postScreenshot()
             case .selectAll: postSelectAll()
             case .screenCapture: postScreenCapture()
@@ -144,8 +147,9 @@ enum KeySynthesizer {
         "twoFingerSwipeRight": .back,
         "twoFingerSwipeLeft": .forward,
         "rightSwipeUp": .addressBar,
-        "twoFingerDoubleTap": .copy,
-        "threeFingerLongPress": .undo,
+        "twoFingerDoubleTap": .cut,
+        "threeFingerLongPress": .copy,
+        "threeFingerTripleTap": .undo,
         "twhLeftLongPress": .redo,
         "ofhLeftSwipeUp": .volumeUp,
         "ofhLeftSwipeDown": .volumeDown,
@@ -185,6 +189,7 @@ enum KeySynthesizer {
     private static let kVK_ANSI_L: CGKeyCode = 0x25
     private static let kVK_ANSI_4: CGKeyCode = 0x15
     private static let kVK_ANSI_5: CGKeyCode = 0x17
+    private static let kVK_ANSI_X: CGKeyCode = 0x07
     private static let kVK_ANSI_C: CGKeyCode = 0x08
     private static let kVK_ANSI_V: CGKeyCode = 0x09
     private static let kVK_ANSI_LeftBracket: CGKeyCode = 0x21
@@ -341,6 +346,7 @@ enum KeySynthesizer {
     // MARK: - Clipboard
 
     static func postSelectAll()          { postKeyCombo(keyCode: kVK_ANSI_A, flags: .maskCommand) }
+    static func postCut()               { postKeyCombo(keyCode: kVK_ANSI_X, flags: .maskCommand) }
     static func postCopy()              { postKeyCombo(keyCode: kVK_ANSI_C, flags: .maskCommand) }
     static func postPaste()             { postKeyCombo(keyCode: kVK_ANSI_V, flags: .maskCommand) }
 
