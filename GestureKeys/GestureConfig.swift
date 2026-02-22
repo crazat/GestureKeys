@@ -93,7 +93,7 @@ final class GestureConfig: ObservableObject {
                  howTo: "두 손가락을 트랙패드에 올려 유지한 뒤, 오른쪽의 세 번째 손가락으로 위/아래로 밀어 볼륨을 조절하세요."),
             Info(id: "fourFingerDoubleTap",  name: "네 손가락 더블탭",            action: "스크린샷 (⇧⌘4)",             defaultEnabled: false,
                  howTo: "네 손가락을 동시에 빠르게 두 번 탭하세요. 손가락을 움직이지 않도록 주의하세요."),
-            Info(id: "fourFingerLongPress",  name: "네 손가락 길게 누르기",       action: "화면 캡처 UI (⇧⌘5)",         defaultEnabled: false,
+            Info(id: "fourFingerLongPress",  name: "네 손가락 길게 누르기",       action: "전체 선택 (⌘A)",             defaultEnabled: false,
                  howTo: "네 손가락을 트랙패드에 올리고 0.5초 이상 움직이지 않고 유지하세요."),
             Info(id: "fiveFingerTap",        name: "다섯 손가락 탭",             action: "잠금화면 (⌃⌘Q)",             defaultEnabled: false,
                  howTo: "다섯 손가락을 동시에 트랙패드에 올렸다가 빠르게 떼세요. 0.4초 이내에 완료해야 합니다."),

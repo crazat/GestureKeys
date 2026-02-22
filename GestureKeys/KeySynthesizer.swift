@@ -28,6 +28,7 @@ enum KeySynthesizer {
         case copy = "copy"
         case paste = "paste"
         case screenshot = "screenshot"
+        case selectAll = "selectAll"
         case screenCapture = "screenCapture"
         case volumeUp = "volumeUp"
         case volumeDown = "volumeDown"
@@ -67,6 +68,7 @@ enum KeySynthesizer {
             case .copy: return "복사 (⌘C)"
             case .paste: return "붙여넣기 (⌘V)"
             case .screenshot: return "스크린샷 (⇧⌘4)"
+            case .selectAll: return "전체 선택 (⌘A)"
             case .screenCapture: return "화면 캡처 (⇧⌘5)"
             case .volumeUp: return "볼륨 증가"
             case .volumeDown: return "볼륨 감소"
@@ -106,6 +108,7 @@ enum KeySynthesizer {
             case .copy: postCopy()
             case .paste: postPaste()
             case .screenshot: postScreenshot()
+            case .selectAll: postSelectAll()
             case .screenCapture: postScreenCapture()
             case .volumeUp: postVolumeUp()
             case .volumeDown: postVolumeDown()
@@ -150,7 +153,7 @@ enum KeySynthesizer {
         "ofhRightSwipeDown": .brightnessDown,
         "twhRightLongPress": .save,
         "fourFingerDoubleTap": .screenshot,
-        "fourFingerLongPress": .screenCapture,
+        "fourFingerLongPress": .selectAll,
         "fiveFingerTap": .lockScreen,
         "fiveFingerClick": .terminateApp,
         "threeFingerSwipeRight": .nextTab,
@@ -170,6 +173,7 @@ enum KeySynthesizer {
 
     // MARK: - Virtual Keycodes
 
+    private static let kVK_ANSI_A: CGKeyCode = 0x00
     private static let kVK_ANSI_W: CGKeyCode = 0x0D
     private static let kVK_ANSI_T: CGKeyCode = 0x11
     private static let kVK_ANSI_R: CGKeyCode = 0x0F
@@ -336,6 +340,7 @@ enum KeySynthesizer {
 
     // MARK: - Clipboard
 
+    static func postSelectAll()          { postKeyCombo(keyCode: kVK_ANSI_A, flags: .maskCommand) }
     static func postCopy()              { postKeyCombo(keyCode: kVK_ANSI_C, flags: .maskCommand) }
     static func postPaste()             { postKeyCombo(keyCode: kVK_ANSI_V, flags: .maskCommand) }
 

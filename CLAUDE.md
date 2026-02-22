@@ -194,7 +194,7 @@ final class XxxRecognizer {
 | ofhRightSwipeUp | 1홀드 + 오른쪽 ↑ | 밝기 증가 | OFF |
 | ofhRightSwipeDown | 1홀드 + 오른쪽 ↓ | 밝기 감소 | OFF |
 | fourFingerDoubleTap | 4손가락 더블탭 | 스크린샷 (⇧⌘4) | OFF |
-| fourFingerLongPress | 4손가락 길게 | 화면캡처 (⇧⌘5) | OFF |
+| fourFingerLongPress | 4손가락 길게 | 전체 선택 (⌘A) | OFF |
 | fiveFingerTap | 5손가락 탭 | 잠금화면 (⌃⌘Q) | OFF |
 | fiveFingerClick | 5손가락 클릭 | 앱 종료 | OFF |
 | fiveFingerLongPress | 5손가락 길게 | 화면 끄기 | OFF |
