@@ -291,3 +291,80 @@ DispatchQueue.global(qos: .userInitiated).async {
 
 - **SourceKit 진단 오류**: `@_silgen_name`으로 바인딩된 private framework 심볼은 SourceKit에서 "Cannot find in scope" 경고를 표시하지만, 실제 빌드는 정상 성공. 이 진단은 무시해도 안전.
 - **GitHub**: https://github.com/crazat/GestureKeys
+
+## 구형 맥북 (2013 Intel) 레거시 빌드
+
+2013 MacBook Pro (macOS 11 Big Sur, Intel x86_64)용 별도 빌드. **본 프로젝트 소스는 절대 수정하지 않고**, `/tmp/GestureKeys-Legacy`에 복사 후 수정하여 빌드.
+
+### 빌드 절차
+
+```bash
+# 1. 임시 복사
+rm -rf /tmp/GestureKeys-Legacy
+cp -R /Users/crazat/Projects/GestureKeys /tmp/GestureKeys-Legacy
+
+# 2. 아래 "필수 수정 사항" 전부 적용
+
+# 3. 빌드
+cd /tmp/GestureKeys-Legacy
+xcodegen generate
+xcodebuild -scheme GestureKeys -configuration Release -derivedDataPath .build -arch x86_64 build
+
+# 4. 데스크톱으로 복사 (AirDrop용)
+cp -R .build/Build/Products/Release/GestureKeys.app ~/Desktop/
+
+# 5. 임시 디렉터리 정리
+rm -rf /tmp/GestureKeys-Legacy
+```
+
+### 필수 수정 사항 (macOS 14 → 11 호환)
+
+| 파일 | 변경 | 이유 |
+|------|------|------|
+| `project.yml` | `MACOSX_DEPLOYMENT_TARGET: "11.0"`, `ARCHS: x86_64` 추가 | macOS 11 + Intel 타깃 |
+| **새 파일** `ColorCompat.swift` | `Color(fromNS:)` 확장 추가 | `Color(nsColor:)` macOS 12+ |
+| `SettingsView.swift` | `Color(nsColor:)` → `Color(fromNS:)` (7곳) | macOS 12+ |
+| `SettingsView.swift` | `.monospacedDigit()` 제거 (2곳) | macOS 12+ |
+| `SettingsView.swift` | `SMAppService` → `#available(macOS 13, *)` 래핑 | macOS 13+ |
+| `SettingsView.swift` | `hand.raised.fingers.spread` → `hand.raised.fill` | SF Symbols 3 (macOS 12+) |
+| `SettingsView.swift` (AppOverrideView) | `@Environment(\.dismiss)` → `\.presentationMode` | macOS 12+ |
+| `OnboardingView.swift` | `@Environment(\.dismiss)` → `\.presentationMode` | macOS 12+ |
+| `OnboardingView.swift` | `hand.raised.fingers.spread` → `hand.raised.fill` | SF Symbols 3 |
+| `CheatSheetView.swift` | `Color(nsColor:)` → `Color(fromNS:)` (2곳) | macOS 12+ |
+| `GestureMonitorView.swift` | `.monospacedDigit()` → `.font(.system(.body, design: .monospaced))` | macOS 12+ |
+| `MenuBarController.swift` | `hand.raised.fingers.spread` → `hand.raised.fill` (2곳) | SF Symbols 3 — **이것이 메뉴바 아이콘 안 보이는 원인** |
+
+### ColorCompat.swift (새 파일)
+
+```swift
+import SwiftUI
+import AppKit
+
+extension Color {
+    init(fromNS nsColor: NSColor) {
+        if let c = nsColor.usingColorSpace(.sRGB) {
+            self.init(.sRGB,
+                      red: Double(c.redComponent),
+                      green: Double(c.greenComponent),
+                      blue: Double(c.blueComponent),
+                      opacity: Double(c.alphaComponent))
+        } else {
+            self = .clear
+        }
+    }
+}
+```
+
+### 구 맥북 설치 후 필수 확인
+
+1. **Gatekeeper 차단 시**: `xattr -cr /Applications/GestureKeys.app`
+2. **접근성 권한**: 시스템 환경설정 → 보안 및 개인 정보 보호 → 개인 정보 보호 → 손쉬운 사용 → GestureKeys 체크
+3. **바이너리 변경 후**: 접근성 목록에서 GestureKeys 체크 해제 → 다시 체크 (권한 재활성화)
+4. **3손가락 클릭 미작동**: 접근성 권한 미부여가 가장 유력한 원인 (CGEventTap 생성 실패 → 클릭 기반 제스처 전부 불가)
+
+### 알려진 호환성 참고
+
+- 엔진 코어 (`GestureEngine`, `KeySynthesizer`, `TouchModels`, `MultitouchBindings`, 모든 인식기): macOS 11 호환 API만 사용, 수정 불필요
+- `MTTouch` 구조체 (96 bytes): macOS 버전 간 레이아웃 동일 (검증됨)
+- SF Symbols: `hand.raised.fingers.spread`만 macOS 12+ (SF Symbols 3), 나머지 전부 SF Symbols 1~2 (macOS 11 호환)
+- 2013 MacBook은 Non-Force Touch (힌지) 트랙패드 — 물리 클릭 시 손가락 displacement가 더 클 수 있음. 문제 시 이동 허용치(`moveThreshold`) 조정 검토

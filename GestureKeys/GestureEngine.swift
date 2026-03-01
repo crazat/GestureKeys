@@ -119,18 +119,25 @@ private func eventTapCallback(
     }
 
     if !shouldSuppress {
-        // 3FC has highest priority among 3-finger gestures.
-        // Physical click is the strongest intent signal — always attempt 3FC.
-        shouldSuppress = engine.threeFingerRecognizer.handlePhysicalClick()
-        if shouldSuppress {
-            // 3FC consumed the click — reset all competing recognizers
-            engine.tapWhileHoldingRecognizer.reset()
-            engine.swipeWhileHoldingRecognizer.reset()
-            engine.longPressWhileHoldingRecognizer.reset()
-            engine.threeFingerDoubleTapRecognizer.reset()
-            engine.threeFingerTripleTapRecognizer.reset()
-            engine.threeFingerLongPressRecognizer.reset()
-            engine.threeFingerSwipeRecognizer.reset()
+        // Skip 3FC when a while-holding recognizer has confirmed a hold+action pattern.
+        // Hold detection requires 2 fingers stable for 100ms+ before the 3rd arrives,
+        // clearly distinguishing from a simultaneous 3-finger click.
+        let holdPatternActive = engine.tapWhileHoldingRecognizer.isActive
+            || engine.swipeWhileHoldingRecognizer.isActive
+            || engine.longPressWhileHoldingRecognizer.isActive
+
+        if !holdPatternActive {
+            shouldSuppress = engine.threeFingerRecognizer.handlePhysicalClick()
+            if shouldSuppress {
+                // 3FC consumed the click — reset all competing recognizers
+                engine.tapWhileHoldingRecognizer.reset()
+                engine.swipeWhileHoldingRecognizer.reset()
+                engine.longPressWhileHoldingRecognizer.reset()
+                engine.threeFingerDoubleTapRecognizer.reset()
+                engine.threeFingerTripleTapRecognizer.reset()
+                engine.threeFingerLongPressRecognizer.reset()
+                engine.threeFingerSwipeRecognizer.reset()
+            }
         }
     }
     let pendingActions = KeySynthesizer.takePendingActions()
