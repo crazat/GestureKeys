@@ -302,8 +302,24 @@ final class GestureEngine {
         }
     }
 
+    /// Completely removes and recreates the EventTap.
+    /// Called when repeated re-enable attempts fail (stale permission after reboot/rebuild).
+    private func reinstallEventTap() {
+        NSLog("GestureKeys: Attempting EventTap reinstall...")
+        removeEventTap()
+        installEventTap()
+        if eventTapActive {
+            NSLog("GestureKeys: EventTap reinstall succeeded")
+            permissionIssuePosted = false
+            tapDisabledTimestamps.removeAll()
+        } else {
+            NSLog("GestureKeys: EventTap reinstall failed — falling back to notification")
+        }
+    }
+
     /// Tracks repeated tapDisabledByTimeout events.
     /// If 3+ disables within 10 seconds, the permission is likely stale (rebuild).
+    /// Automatically attempts EventTap reinstall before escalating to user notification.
     func trackTapDisabled() {
         let now = ProcessInfo.processInfo.systemUptime
         tapDisabledTimestamps.append(now)
@@ -311,10 +327,14 @@ final class GestureEngine {
         tapDisabledTimestamps = tapDisabledTimestamps.filter { now - $0 < 10.0 }
 
         if tapDisabledTimestamps.count >= 3 && !permissionIssuePosted {
-            permissionIssuePosted = true
-            NSLog("GestureKeys: EventTap disabled %d times in 10s — likely stale permission", tapDisabledTimestamps.count)
-            DispatchQueue.main.async {
-                NotificationCenter.default.post(name: Self.permissionIssueNotification, object: nil)
+            NSLog("GestureKeys: EventTap disabled %d times in 10s — attempting reinstall", tapDisabledTimestamps.count)
+            reinstallEventTap()
+            // If reinstall failed, escalate to user notification
+            if !eventTapActive {
+                permissionIssuePosted = true
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(name: Self.permissionIssueNotification, object: nil)
+                }
             }
         }
     }

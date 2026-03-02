@@ -56,14 +56,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Accessibility
 
     /// Poll every 1 second until accessibility permission is granted, then start engine.
+    /// Stops polling after 60 seconds if permission is not granted.
     private func startAccessibilityPolling() {
         NSLog("GestureKeys: Waiting for accessibility permission...")
+        let startTime = ProcessInfo.processInfo.systemUptime
         accessibilityTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
             if AXIsProcessTrusted() {
                 timer.invalidate()
                 self?.accessibilityTimer = nil
                 NSLog("GestureKeys: Accessibility permission granted")
                 self?.engine.start()
+            } else if ProcessInfo.processInfo.systemUptime - startTime > 60.0 {
+                timer.invalidate()
+                self?.accessibilityTimer = nil
+                NSLog("GestureKeys: Accessibility polling timed out after 60s — MenuBarController polling continues")
             }
         }
     }
