@@ -11,11 +11,12 @@ final class MenuBarController {
 
     private var statusItem: NSStatusItem?
     private let engine: GestureEngine
-    private var isEnabled = true
+    private var isEnabled: Bool
     private var permissionTimer: Timer?
 
     init(engine: GestureEngine) {
         self.engine = engine
+        self.isEnabled = UserDefaults.standard.object(forKey: "engineEnabled") as? Bool ?? true
     }
 
     func setup() {
@@ -33,7 +34,7 @@ final class MenuBarController {
             keyEquivalent: ""
         )
         toggleItem.target = self
-        toggleItem.state = .on
+        toggleItem.state = isEnabled ? .on : .off
         menu.addItem(toggleItem)
 
         menu.addItem(NSMenuItem.separator())
@@ -75,12 +76,14 @@ final class MenuBarController {
         item.menu = menu
         statusItem = item
 
-        // Check initial permission state
+        // Check initial permission state and enabled state
         if !AXIsProcessTrusted() {
             updateIcon(state: .noPermission)
-            startPermissionPolling()
-        } else {
+            if isEnabled { startPermissionPolling() }
+        } else if isEnabled {
             updateIcon(state: .active)
+        } else {
+            updateIcon(state: .disabled)
         }
 
         // Observe engine health for icon updates
@@ -122,13 +125,8 @@ final class MenuBarController {
             if AXIsProcessTrusted() {
                 self.permissionTimer?.invalidate()
                 self.permissionTimer = nil
-                if self.isEnabled {
-                    self.engine.start()
-                    self.updateIcon(state: .active)
-                } else {
-                    self.updateIcon(state: .disabled)
-                }
-                NSLog("GestureKeys: Accessibility permission granted, engine started")
+                // Icon update only — engine.start() is handled by AppDelegate
+                self.updateIcon(state: self.isEnabled ? .active : .disabled)
             }
         }
     }
@@ -137,11 +135,17 @@ final class MenuBarController {
 
     @objc private func toggleEnabled(_ sender: NSMenuItem) {
         isEnabled.toggle()
+        UserDefaults.standard.set(isEnabled, forKey: "engineEnabled")
         sender.state = isEnabled ? .on : .off
 
         if isEnabled {
-            engine.start()
-            updateIcon(state: .active)
+            if AXIsProcessTrusted() {
+                engine.start()
+                updateIcon(state: .active)
+            } else {
+                updateIcon(state: .noPermission)
+                startPermissionPolling()
+            }
         } else {
             engine.stop()
             updateIcon(state: .disabled)

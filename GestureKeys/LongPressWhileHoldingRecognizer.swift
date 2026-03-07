@@ -28,20 +28,11 @@ final class LongPressWhileHoldingRecognizer {
 
     private(set) var state: State = .idle
 
-    private var holdStabilityDuration: TimeInterval { GestureConfig.shared.effectiveHoldStability }
     private var longPressDuration: TimeInterval { GestureConfig.shared.effectiveLongPressDuration(base: 0.400) }
-    private let gracePeriod: TimeInterval = 0.080
     private let firedTimeout: TimeInterval = 5.0
-    private let holdTimeout: TimeInterval = 10.0
 
-    // Hold detection
-    private var holdStartTime: TimeInterval = 0
-    private var holdDetectedTime: TimeInterval = 0
-    private var holdTracking = false
-    private var holdConfirmed = false
-    private var dropTime: TimeInterval = 0
-    private var holdAverageX: Float = 0
-    private var holdPathIndices: Set<Int32> = []
+    /// Shared hold detection logic
+    private var hold = TwoFingerHoldDetector()
 
     // Press tracking
     private var pressStartTime: TimeInterval = 0
@@ -56,31 +47,32 @@ final class LongPressWhileHoldingRecognizer {
 
         switch state {
         case .idle:
-            handleIdle(activeTouches: activeTouches, timestamp: timestamp)
+            if hold.processIdle(activeTouches: activeTouches, timestamp: timestamp,
+                                holdStabilityDuration: GestureConfig.shared.effectiveHoldStability) {
+                state = .holdDetected
+            }
             return false
 
         case .holdDetected:
             if activeCount < 2 {
-                if !handleGrace(timestamp: timestamp) { reset() }
+                if !hold.handleGrace(timestamp: timestamp) { reset() }
                 return false
             }
-            dropTime = 0
-            if holdDetectedTime > 0 && timestamp - holdDetectedTime > holdTimeout {
+            hold.dropTime = 0
+            if hold.isTimedOut(timestamp: timestamp) {
                 reset()
                 return false
             }
 
             if activeCount == 2 {
-                holdAverageX = activeTouches.reduce(Float(0)) { $0 + $1.normalizedVector.position.x } / 2.0
-                holdPathIndices.removeAll(keepingCapacity: true)
-                for touch in activeTouches { holdPathIndices.insert(touch.pathIndex) }
-                holdConfirmed = true
+                hold.updateHoldPosition(activeTouches)
+                hold.holdConfirmed = true
             }
 
-            if activeCount >= 3 && holdConfirmed && !holdPathIndices.isEmpty {
-                if let newFinger = activeTouches.first(where: { !holdPathIndices.contains($0.pathIndex) }) {
+            if activeCount >= 3 && hold.holdConfirmed && !hold.holdPathIndices.isEmpty {
+                if let newFinger = activeTouches.first(where: { !self.hold.holdPathIndices.contains($0.pathIndex) }) {
                     let newX = newFinger.normalizedVector.position.x
-                    pressIsLeft = newX < holdAverageX
+                    pressIsLeft = newX < hold.holdAverageX
                     pressStartTime = timestamp
                     state = .pressing
                 }
@@ -89,13 +81,14 @@ final class LongPressWhileHoldingRecognizer {
 
         case .pressing:
             if activeCount < 2 {
-                if !handleGrace(timestamp: timestamp) { reset() }
+                if !hold.handleGrace(timestamp: timestamp) { reset() }
                 return false
             }
-            dropTime = 0
+            // 4+ fingers → likely a different gesture (4FC, 5FT, etc.)
+            if activeCount > 3 { reset(); return false }
+            hold.dropTime = 0
 
             if activeCount == 2 {
-                // Finger lifted before threshold - was a tap, not long press
                 state = .holdDetected
                 return false
             }
@@ -113,17 +106,17 @@ final class LongPressWhileHoldingRecognizer {
 
         case .fired:
             if activeCount < 2 {
-                if !handleGrace(timestamp: timestamp) { reset() }
+                if !hold.handleGrace(timestamp: timestamp) { reset() }
                 return false
             }
-            dropTime = 0
+            hold.dropTime = 0
             if timestamp - firedTime > firedTimeout {
                 reset()
                 return false
             }
             if activeCount == 2 {
                 state = .holdDetected
-                holdDetectedTime = timestamp
+                hold.holdDetectedTime = timestamp
             }
             return false
         }
@@ -131,48 +124,9 @@ final class LongPressWhileHoldingRecognizer {
 
     func reset() {
         state = .idle
-        holdTracking = false
-        holdStartTime = 0
-        holdDetectedTime = 0
-        holdConfirmed = false
-        dropTime = 0
-        holdAverageX = 0
-        holdPathIndices.removeAll(keepingCapacity: true)
+        hold.reset()
         pressStartTime = 0
         pressIsLeft = true
         firedTime = 0
-    }
-
-    // MARK: - Private
-
-    private func handleIdle(activeTouches: [MTTouch], timestamp: TimeInterval) {
-        // Filter extreme edge/palm touches for hold detection
-        // (wider typing-zone filter is handled by GestureEngine's twoFingerSuppressed)
-        var qualityCount = 0
-        for touch in activeTouches where !touch.isEdgeTouch && !touch.isPalmSized { qualityCount += 1 }
-        if qualityCount >= 2 {
-            if holdTracking {
-                if timestamp - holdStartTime >= holdStabilityDuration {
-                    state = .holdDetected
-                    holdDetectedTime = timestamp
-                }
-            } else {
-                holdTracking = true
-                holdStartTime = timestamp
-            }
-        } else {
-            if holdTracking {
-                if dropTime == 0 { dropTime = timestamp }
-                else if timestamp - dropTime > gracePeriod {
-                    holdTracking = false
-                    dropTime = 0
-                }
-            }
-        }
-    }
-
-    private func handleGrace(timestamp: TimeInterval) -> Bool {
-        if dropTime == 0 { dropTime = timestamp; return true }
-        return timestamp - dropTime <= gracePeriod
     }
 }

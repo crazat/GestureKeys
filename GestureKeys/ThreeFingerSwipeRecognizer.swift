@@ -25,8 +25,10 @@ final class ThreeFingerSwipeRecognizer {
     private let maxDuration: TimeInterval = 0.400
     private let directionRatio: Float = 2.5
     private let gracePeriod: TimeInterval = 0.080
+    private let firedTimeout: TimeInterval = 2.0
 
     private var startTime: TimeInterval = 0
+    private var firedTime: TimeInterval = 0
     private var dropTime: TimeInterval = 0
     private var initialPositions: [Int32: (x: Float, y: Float)] = [:]
 
@@ -86,12 +88,13 @@ final class ThreeFingerSwipeRecognizer {
                     }
                 }
                 state = .fired
+                firedTime = timestamp
                 return true
             }
 
-            // Vertical swipe (trackpad Y: positive = toward user = down)
+            // Vertical swipe (trackpad Y: positive = away from user = up)
             if abs(avgDy) > abs(avgDx) * directionRatio && abs(avgDy) >= swipeThreshold {
-                if avgDy < 0 {
+                if avgDy > 0 {
                     if GestureConfig.shared.isEnabled("threeFingerSwipeUp") {
                         KeySynthesizer.fireAction(gestureId: "threeFingerSwipeUp")
                     }
@@ -101,11 +104,34 @@ final class ThreeFingerSwipeRecognizer {
                     }
                 }
                 state = .fired
+                firedTime = timestamp
+                return true
+            }
+
+            // Diagonal swipe: anything not clearly horizontal or vertical
+            // (horizontal/vertical checks above already excluded ratio > 2.5 and < 0.4)
+            let displacement = sqrtf(avgDx * avgDx + avgDy * avgDy)
+            if displacement >= swipeThreshold && abs(avgDx) > 0.001 && abs(avgDy) > 0.001 {
+                let gestureId: String
+                if avgDx > 0 && avgDy > 0 {
+                    gestureId = "threeFingerSwipeDiagUpRight"
+                } else if avgDx < 0 && avgDy > 0 {
+                    gestureId = "threeFingerSwipeDiagUpLeft"
+                } else if avgDx > 0 && avgDy < 0 {
+                    gestureId = "threeFingerSwipeDiagDownRight"
+                } else {
+                    gestureId = "threeFingerSwipeDiagDownLeft"
+                }
+                if GestureConfig.shared.isEnabled(gestureId) {
+                    KeySynthesizer.fireAction(gestureId: gestureId)
+                }
+                state = .fired
+                firedTime = timestamp
                 return true
             }
 
         case .fired:
-            if activeCount == 0 { reset() }
+            if activeCount == 0 || timestamp - firedTime > firedTimeout { reset() }
         }
 
         return false
@@ -116,5 +142,6 @@ final class ThreeFingerSwipeRecognizer {
         initialPositions.removeAll(keepingCapacity: true)
         dropTime = 0
         startTime = 0
+        firedTime = 0
     }
 }

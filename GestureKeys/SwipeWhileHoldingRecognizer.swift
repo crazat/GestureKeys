@@ -26,18 +26,10 @@ final class SwipeWhileHoldingRecognizer {
 
     private(set) var state: State = .idle
 
-    private var holdStabilityDuration: TimeInterval { GestureConfig.shared.effectiveHoldStability }
     private var swipeThreshold: Float { GestureConfig.shared.effectiveSwipeThreshold(base: 0.06) }
-    private let gracePeriod: TimeInterval = 0.080
-    private let holdTimeout: TimeInterval = 10.0
 
-    // Hold detection
-    private var holdStartTime: TimeInterval = 0
-    private var holdDetectedTime: TimeInterval = 0
-    private var holdTracking = false
-    private var dropTime: TimeInterval = 0
-    private var holdAverageX: Float = 0
-    private var holdPathIndices: Set<Int32> = []
+    /// Shared hold detection logic
+    private var hold = TwoFingerHoldDetector()
 
     // Swipe tracking
     private var swipeSide: Side = .left
@@ -55,30 +47,33 @@ final class SwipeWhileHoldingRecognizer {
 
         switch state {
         case .idle:
-            handleIdle(activeTouches: activeTouches, timestamp: timestamp)
+            if hold.processIdle(activeTouches: activeTouches, timestamp: timestamp,
+                                holdStabilityDuration: GestureConfig.shared.effectiveHoldStability) {
+                state = .holdDetected
+            }
             return false
 
         case .holdDetected:
             if activeCount < 2 {
-                if !handleGrace(timestamp: timestamp) { reset() }
+                if !hold.handleGrace(timestamp: timestamp) { reset() }
                 return false
             }
-            dropTime = 0
-            if holdDetectedTime > 0 && timestamp - holdDetectedTime > holdTimeout {
+            // 4+ fingers → likely a different gesture (4FC, 5FT, etc.)
+            if activeCount > 3 { reset(); return false }
+            hold.dropTime = 0
+            if hold.isTimedOut(timestamp: timestamp) {
                 reset()
                 return false
             }
 
             if activeCount == 2 {
-                holdAverageX = activeTouches.reduce(Float(0)) { $0 + $1.normalizedVector.position.x } / 2.0
-                holdPathIndices.removeAll(keepingCapacity: true)
-                for touch in activeTouches { holdPathIndices.insert(touch.pathIndex) }
+                hold.updateHoldPosition(activeTouches)
             }
 
-            if activeCount >= 3 && !holdPathIndices.isEmpty {
-                if let newFinger = activeTouches.first(where: { !holdPathIndices.contains($0.pathIndex) }) {
+            if activeCount >= 3 && !hold.holdPathIndices.isEmpty {
+                if let newFinger = activeTouches.first(where: { !self.hold.holdPathIndices.contains($0.pathIndex) }) {
                     let newX = newFinger.normalizedVector.position.x
-                    swipeSide = newX < holdAverageX ? .left : .right
+                    swipeSide = newX < hold.holdAverageX ? .left : .right
                     swipePathIndex = newFinger.pathIndex
                     swipeStartX = newX
                     swipeStartY = newFinger.normalizedVector.position.y
@@ -91,10 +86,10 @@ final class SwipeWhileHoldingRecognizer {
 
         case .tracking:
             if activeCount < 2 {
-                if !handleGrace(timestamp: timestamp) { reset() }
+                if !hold.handleGrace(timestamp: timestamp) { reset() }
                 return false
             }
-            dropTime = 0
+            hold.dropTime = 0
 
             if activeCount > 3 { reset(); return false }
 
@@ -126,12 +121,7 @@ final class SwipeWhileHoldingRecognizer {
 
     func reset() {
         state = .idle
-        holdTracking = false
-        holdStartTime = 0
-        holdDetectedTime = 0
-        dropTime = 0
-        holdAverageX = 0
-        holdPathIndices.removeAll(keepingCapacity: true)
+        hold.reset()
         swipePathIndex = -1
         swipeStartX = 0
         swipeStartY = 0
@@ -141,38 +131,6 @@ final class SwipeWhileHoldingRecognizer {
     }
 
     // MARK: - Private
-
-    private func handleIdle(activeTouches: [MTTouch], timestamp: TimeInterval) {
-        // Filter extreme edge/palm touches for hold detection
-        // (wider typing-zone filter is handled by GestureEngine's twoFingerSuppressed)
-        var qualityCount = 0
-        for touch in activeTouches where !touch.isEdgeTouch && !touch.isPalmSized { qualityCount += 1 }
-        if qualityCount >= 2 {
-            if holdTracking {
-                if timestamp - holdStartTime >= holdStabilityDuration {
-                    state = .holdDetected
-                    holdDetectedTime = timestamp
-                }
-            } else {
-                holdTracking = true
-                holdStartTime = timestamp
-            }
-        } else {
-            if holdTracking {
-                if dropTime == 0 {
-                    dropTime = timestamp
-                } else if timestamp - dropTime > gracePeriod {
-                    holdTracking = false
-                    dropTime = 0
-                }
-            }
-        }
-    }
-
-    private func handleGrace(timestamp: TimeInterval) -> Bool {
-        if dropTime == 0 { dropTime = timestamp; return true }
-        return timestamp - dropTime <= gracePeriod
-    }
 
     private func checkAndFireSwipe() -> Bool {
         let dx = lastSwipeX - swipeStartX
@@ -226,9 +184,9 @@ final class SwipeWhileHoldingRecognizer {
 
         // Preserve hold state for consecutive gestures (don't reset to idle)
         state = .holdDetected
-        holdDetectedTime = ProcessInfo.processInfo.systemUptime
+        hold.holdDetectedTime = ProcessInfo.processInfo.systemUptime
         swipePathIndex = -1
-        dropTime = 0
+        hold.dropTime = 0
         return didFire
     }
 }

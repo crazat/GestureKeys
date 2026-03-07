@@ -43,13 +43,24 @@ final class FiveFingerTapRecognizer {
             if activeCount > 5 { reset(); return false }
             if activeCount == 5 {
                 dropTime = 0
-                if hasExcessiveMovement(activeTouches) { reset() }
+                if hasExcessiveMovement(activeTouches, initialPositions: initialPositions, threshold: moveThreshold) { reset() }
                 return false
             }
             if activeCount == 0 {
                 var didFire = false
                 if GestureConfig.shared.isEnabled("fiveFingerTap") {
-                    KeySynthesizer.fireAction(gestureId: "fiveFingerTap")
+                    let config = GestureConfig.shared
+                    if config.zonesEnabled(for: "fiveFingerTap") {
+                        let avgX = initialPositions.reduce(Float(0)) { $0 + $1.x } / max(Float(initialPositions.count), 1)
+                        let zone = TrackpadZone.from(x: avgX)
+                        if let zoneAction = config.zoneAction(for: "fiveFingerTap", zone: zone) {
+                            KeySynthesizer.fireAction(gestureId: "fiveFingerTap", action: { zoneAction.execute() })
+                        } else {
+                            KeySynthesizer.fireAction(gestureId: "fiveFingerTap")
+                        }
+                    } else {
+                        KeySynthesizer.fireAction(gestureId: "fiveFingerTap")
+                    }
                     didFire = true
                 }
                 reset()
@@ -68,14 +79,4 @@ final class FiveFingerTapRecognizer {
         tapDownTime = 0
     }
 
-    private func hasExcessiveMovement(_ activeTouches: [MTTouch]) -> Bool {
-        for touch in activeTouches {
-            if let initial = initialPositions.first(where: { $0.pathIndex == touch.pathIndex }) {
-                let dx = touch.normalizedVector.position.x - initial.x
-                let dy = touch.normalizedVector.position.y - initial.y
-                if dx * dx + dy * dy > moveThreshold * moveThreshold { return true }
-            }
-        }
-        return false
-    }
 }

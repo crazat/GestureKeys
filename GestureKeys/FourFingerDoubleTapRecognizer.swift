@@ -44,7 +44,7 @@ final class FourFingerDoubleTapRecognizer {
             if timestamp - tapDownTime > maxTapDuration { reset(); return false }
             if activeCount == 4 {
                 dropTime = 0
-                if hasExcessiveMovement(activeTouches) { reset() }
+                if hasExcessiveMovement(activeTouches, initialPositions: initialPositions, threshold: moveThreshold) { reset() }
                 return false
             }
             if activeCount == 0 {
@@ -71,7 +71,7 @@ final class FourFingerDoubleTapRecognizer {
             if timestamp - tapDownTime > maxTapDuration { reset(); return false }
             if activeCount == 4 {
                 dropTime = 0
-                if hasExcessiveMovement(activeTouches) { reset() }
+                if hasExcessiveMovement(activeTouches, initialPositions: initialPositions, threshold: moveThreshold) { reset() }
                 return false
             }
             if activeCount == 0 {
@@ -104,14 +104,4 @@ final class FourFingerDoubleTapRecognizer {
         }
     }
 
-    private func hasExcessiveMovement(_ activeTouches: [MTTouch]) -> Bool {
-        for touch in activeTouches {
-            if let initial = initialPositions.first(where: { $0.pathIndex == touch.pathIndex }) {
-                let dx = touch.normalizedVector.position.x - initial.x
-                let dy = touch.normalizedVector.position.y - initial.y
-                if dx * dx + dy * dy > moveThreshold * moveThreshold { return true }
-            }
-        }
-        return false
-    }
 }

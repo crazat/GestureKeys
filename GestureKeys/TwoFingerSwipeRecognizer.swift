@@ -31,8 +31,10 @@ final class TwoFingerSwipeRecognizer {
     private let maxDuration: TimeInterval = 0.500
     private let horizontalRatio: Float = 2.5
     private let gracePeriod: TimeInterval = 0.080
+    private let firedTimeout: TimeInterval = 2.0
 
     private var startTime: TimeInterval = 0
+    private var firedTime: TimeInterval = 0
     private var dropTime: TimeInterval = 0
     private var initialPositions: [Int32: (x: Float, y: Float)] = [:]
 
@@ -86,21 +88,25 @@ final class TwoFingerSwipeRecognizer {
             guard abs(avgDx) > abs(avgDy) * horizontalRatio else { return false }
 
             if abs(avgDx) >= swipeThreshold {
+                var didFire = false
                 if avgDx > 0 {
                     if GestureConfig.shared.isEnabled("twoFingerSwipeRight") {
                         KeySynthesizer.fireAction(gestureId: "twoFingerSwipeRight")
+                        didFire = true
                     }
                 } else {
                     if GestureConfig.shared.isEnabled("twoFingerSwipeLeft") {
                         KeySynthesizer.fireAction(gestureId: "twoFingerSwipeLeft")
+                        didFire = true
                     }
                 }
                 state = .fired
-                return true
+                firedTime = timestamp
+                return didFire
             }
 
         case .fired:
-            if activeCount == 0 { reset() }
+            if activeCount == 0 || timestamp - firedTime > firedTimeout { reset() }
         }
 
         return false
@@ -111,5 +117,6 @@ final class TwoFingerSwipeRecognizer {
         initialPositions.removeAll(keepingCapacity: true)
         dropTime = 0
         startTime = 0
+        firedTime = 0
     }
 }

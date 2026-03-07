@@ -87,7 +87,7 @@ final class OneFingerHoldSwipeRecognizer {
                     holdPathIndex = finger.pathIndex
                     holdInitialX = finger.normalizedVector.position.x
                     holdInitialY = finger.normalizedVector.position.y
-                } else if holdFingerMoved(finger) {
+                } else if hasExcessiveMovement(finger, initialX: holdInitialX, initialY: holdInitialY, threshold: holdMoveThreshold) {
                     holdStartTime = timestamp
                     holdInitialX = finger.normalizedVector.position.x
                     holdInitialY = finger.normalizedVector.position.y
@@ -109,7 +109,7 @@ final class OneFingerHoldSwipeRecognizer {
                 return false
             }
             holdDropTime = 0
-            if holdFingerMoved(heldFinger) { reset(); return false }
+            if hasExcessiveMovement(heldFinger, initialX: holdInitialX, initialY: holdInitialY, threshold: holdMoveThreshold) { reset(); return false }
 
             if activeCount == 2 {
                 if let swipeFinger = activeTouches.first(where: { $0.pathIndex != holdPathIndex }) {
@@ -222,9 +222,4 @@ final class OneFingerHoldSwipeRecognizer {
         swipeIsRight = false
     }
 
-    private func holdFingerMoved(_ finger: MTTouch) -> Bool {
-        let dx = finger.normalizedVector.position.x - holdInitialX
-        let dy = finger.normalizedVector.position.y - holdInitialY
-        return dx * dx + dy * dy > holdMoveThreshold * holdMoveThreshold
-    }
 }

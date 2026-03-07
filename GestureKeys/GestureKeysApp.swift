@@ -19,13 +19,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSLog("GestureKeys: App launched")
+        CrashReporter.install()
+        SettingsMigration.runIfNeeded()
+
+        // If a stable copy exists in ~/Applications and we're running from
+        // somewhere else (DerivedData, .build, etc.), relaunch from the
+        // stable copy so SMAppService registers the correct path.
+        if let bundlePath = Bundle.main.bundlePath as NSString? {
+            let installDir = (NSHomeDirectory() as NSString).appendingPathComponent("Applications")
+            let stablePath = (installDir as NSString).appendingPathComponent("GestureKeys.app")
+            if !bundlePath.hasPrefix(installDir),
+               FileManager.default.fileExists(atPath: stablePath) {
+                NSLog("GestureKeys: Running from non-standard path, relaunching from %@", stablePath)
+                NSWorkspace.shared.openApplication(
+                    at: URL(fileURLWithPath: stablePath),
+                    configuration: NSWorkspace.OpenConfiguration()
+                )
+                NSApp.terminate(nil)
+                return
+            }
+        }
+
+        NSLog("GestureKeys: App launched from %@", Bundle.main.bundlePath)
 
         menuBarController = MenuBarController(engine: engine)
         menuBarController?.setup()
 
         // Show onboarding on first launch
         OnboardingWindowController.shared.showIfNeeded()
+        CrashReporter.checkForPreviousCrash()
 
         // Observe engine health notifications (S2, S3)
         NotificationCenter.default.addObserver(
@@ -36,6 +58,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self, selector: #selector(handlePermissionIssue),
             name: GestureEngine.permissionIssueNotification, object: nil
         )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(handleNoDevices),
+            name: GestureEngine.noDevicesNotification, object: nil
+        )
+
+        // Respect persisted enabled/disabled state from menu bar toggle
+        let engineEnabled = UserDefaults.standard.object(forKey: "engineEnabled") as? Bool ?? true
+        guard engineEnabled else {
+            NSLog("GestureKeys: Engine disabled by user — skipping start")
+            return
+        }
 
         let trusted = AXIsProcessTrusted()
         NSLog("GestureKeys: AXIsProcessTrusted = %d", trusted ? 1 : 0)
@@ -56,20 +89,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Accessibility
 
     /// Poll every 1 second until accessibility permission is granted, then start engine.
-    /// Stops polling after 60 seconds if permission is not granted.
     private func startAccessibilityPolling() {
         NSLog("GestureKeys: Waiting for accessibility permission...")
-        let startTime = ProcessInfo.processInfo.systemUptime
         accessibilityTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
             if AXIsProcessTrusted() {
                 timer.invalidate()
                 self?.accessibilityTimer = nil
                 NSLog("GestureKeys: Accessibility permission granted")
                 self?.engine.start()
-            } else if ProcessInfo.processInfo.systemUptime - startTime > 60.0 {
-                timer.invalidate()
-                self?.accessibilityTimer = nil
-                NSLog("GestureKeys: Accessibility polling timed out after 60s — MenuBarController polling continues")
             }
         }
     }
@@ -112,6 +139,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSWorkspace.shared.open(url)
             }
         }
+    }
+
+    /// No multitouch devices found — trackpad may be disconnected or unsupported.
+    @objc private func handleNoDevices() {
+        NSLog("GestureKeys: No multitouch devices — showing alert")
+        let alert = NSAlert()
+        alert.messageText = "트랙패드를 찾을 수 없습니다"
+        alert.informativeText = "멀티터치 장치가 감지되지 않았습니다.\n외장 트랙패드를 사용하는 경우 연결을 확인해주세요.\n앱이 백그라운드에서 5초마다 장치를 다시 확인합니다."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "확인")
+        alert.runModal()
     }
 
     private func showAccessibilityAlert() {

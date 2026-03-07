@@ -32,9 +32,11 @@ final class ThreeFingerTripleTapRecognizer {
     private var maxTapDuration: TimeInterval { GestureConfig.shared.effectiveMaxTapDuration }
     private var moveThreshold: Float { GestureConfig.shared.effectiveMoveThreshold(base: 0.03) }
     private let gracePeriod: TimeInterval = 0.080
+    private let firedTimeout: TimeInterval = 2.0
 
     private var tapDownTime: TimeInterval = 0
     private var tapUpTime: TimeInterval = 0
+    private var firedTime: TimeInterval = 0
     private var dropTime: TimeInterval = 0
     private var initialPositions: [(pathIndex: Int32, x: Float, y: Float)] = []
 
@@ -75,12 +77,13 @@ final class ThreeFingerTripleTapRecognizer {
                     didFire = true
                 }
                 state = .fired
+                firedTime = timestamp
                 return didFire
             }
             return false
 
         case .fired:
-            if activeCount == 0 { reset() }
+            if activeCount == 0 || timestamp - firedTime > firedTimeout { reset() }
             return false
         }
     }
@@ -90,6 +93,7 @@ final class ThreeFingerTripleTapRecognizer {
         initialPositions.removeAll(keepingCapacity: true)
         tapDownTime = 0
         tapUpTime = 0
+        firedTime = 0
         dropTime = 0
     }
 
@@ -101,7 +105,7 @@ final class ThreeFingerTripleTapRecognizer {
         if timestamp - tapDownTime > maxTapDuration { reset(); return false }
         if activeCount == 3 {
             dropTime = 0
-            if hasExcessiveMovement(activeTouches) { reset() }
+            if hasExcessiveMovement(activeTouches, initialPositions: initialPositions, threshold: moveThreshold) { reset() }
             return false
         }
         if activeCount == 0 {
@@ -136,14 +140,4 @@ final class ThreeFingerTripleTapRecognizer {
         }
     }
 
-    private func hasExcessiveMovement(_ activeTouches: [MTTouch]) -> Bool {
-        for touch in activeTouches {
-            if let initial = initialPositions.first(where: { $0.pathIndex == touch.pathIndex }) {
-                let dx = touch.normalizedVector.position.x - initial.x
-                let dy = touch.normalizedVector.position.y - initial.y
-                if dx * dx + dy * dy > moveThreshold * moveThreshold { return true }
-            }
-        }
-        return false
-    }
 }

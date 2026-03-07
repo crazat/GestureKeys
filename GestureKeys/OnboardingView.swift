@@ -104,7 +104,7 @@ struct OnboardingView: View {
                 .fontWeight(.bold)
 
             VStack(alignment: .leading, spacing: 8) {
-                quickTip(icon: "hand.tap", text: "두 손가락 더블탭 → 복사")
+                quickTip(icon: "hand.tap", text: "두 손가락 더블탭 → 잘라내기")
                 quickTip(icon: "hand.tap", text: "세 손가락 더블탭 → 붙여넣기")
                 quickTip(icon: "hand.draw", text: "두 손가락 스와이프 → 뒤로/앞으로")
                 quickTip(icon: "hand.raised", text: "세 손가락 클릭 → 탭 닫기")

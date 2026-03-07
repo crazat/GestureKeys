@@ -79,7 +79,7 @@ final class OneFingerHoldTapRecognizer {
                     holdPathIndex = finger.pathIndex
                     holdInitialX = finger.normalizedVector.position.x
                     holdInitialY = finger.normalizedVector.position.y
-                } else if hasExcessiveMovement(finger) {
+                } else if hasExcessiveMovement(finger, initialX: holdInitialX, initialY: holdInitialY, threshold: moveThreshold) {
                     holdStartTime = timestamp
                     holdInitialX = finger.normalizedVector.position.x
                     holdInitialY = finger.normalizedVector.position.y
@@ -102,7 +102,7 @@ final class OneFingerHoldTapRecognizer {
                 return false
             }
             holdDropTime = 0
-            if hasExcessiveMovement(holdFound) { reset(); return false }
+            if hasExcessiveMovement(holdFound, initialX: holdInitialX, initialY: holdInitialY, threshold: moveThreshold) { reset(); return false }
 
             if activeCount == 2 {
                 if let tapFinger = activeTouches.first(where: { $0.pathIndex != holdPathIndex }) {
@@ -175,9 +175,4 @@ final class OneFingerHoldTapRecognizer {
         tapIsRight = false
     }
 
-    private func hasExcessiveMovement(_ finger: MTTouch) -> Bool {
-        let dx = finger.normalizedVector.position.x - holdInitialX
-        let dy = finger.normalizedVector.position.y - holdInitialY
-        return dx * dx + dy * dy > moveThreshold * moveThreshold
-    }
 }

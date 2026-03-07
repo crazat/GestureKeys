@@ -77,7 +77,7 @@ final class ThreeFingerDoubleTapRecognizer {
             if timestamp - tapDownTime > maxTapDuration { reset(); return false }
             if activeCount == 3 {
                 dropTime = 0
-                if hasExcessiveMovement(activeTouches) { reset() }
+                if hasExcessiveMovement(activeTouches, initialPositions: initialPositions, threshold: moveThreshold) { reset() }
                 return false
             }
             if activeCount == 0 {
@@ -97,6 +97,16 @@ final class ThreeFingerDoubleTapRecognizer {
                 return false
             }
             if activeCount == 3 {
+                // Fire immediately on second tap down when triple-tap is not suppressing
+                if !suppressFire {
+                    var didFire = false
+                    if GestureConfig.shared.isEnabled("threeFingerDoubleTap") {
+                        fireZoneAware()
+                        didFire = true
+                    }
+                    reset()
+                    return didFire
+                }
                 recordPositions(activeTouches)
                 tapDownTime = timestamp
                 state = .secondTapDown
@@ -104,11 +114,12 @@ final class ThreeFingerDoubleTapRecognizer {
             return false
 
         case .secondTapDown:
+            // Only reached when suppressFire was true (triple-tap tracking)
             if activeCount > 3 { reset(); return false }
             if timestamp - tapDownTime > maxTapDuration { reset(); return false }
             if activeCount == 3 {
                 dropTime = 0
-                if hasExcessiveMovement(activeTouches) { reset() }
+                if hasExcessiveMovement(activeTouches, initialPositions: initialPositions, threshold: moveThreshold) { reset() }
                 return false
             }
             if activeCount == 0 {
@@ -138,9 +149,25 @@ final class ThreeFingerDoubleTapRecognizer {
         tapDownTime = 0
         firstTapUpTime = 0
         dropTime = 0
+        didSuppressFire = false
     }
 
     // MARK: - Private
+
+    private func fireZoneAware() {
+        let config = GestureConfig.shared
+        if config.zonesEnabled(for: "threeFingerDoubleTap") {
+            let avgX = initialPositions.reduce(Float(0)) { $0 + $1.x } / max(Float(initialPositions.count), 1)
+            let zone = TrackpadZone.from(x: avgX)
+            if let zoneAction = config.zoneAction(for: "threeFingerDoubleTap", zone: zone) {
+                KeySynthesizer.fireAction(gestureId: "threeFingerDoubleTap", action: { zoneAction.execute() })
+            } else {
+                KeySynthesizer.fireAction(gestureId: "threeFingerDoubleTap")
+            }
+        } else {
+            KeySynthesizer.fireAction(gestureId: "threeFingerDoubleTap")
+        }
+    }
 
     private func recordPositions(_ activeTouches: [MTTouch]) {
         initialPositions.removeAll(keepingCapacity: true)
@@ -149,16 +176,4 @@ final class ThreeFingerDoubleTapRecognizer {
         }
     }
 
-    private func hasExcessiveMovement(_ activeTouches: [MTTouch]) -> Bool {
-        for touch in activeTouches {
-            if let initial = initialPositions.first(where: { $0.pathIndex == touch.pathIndex }) {
-                let dx = touch.normalizedVector.position.x - initial.x
-                let dy = touch.normalizedVector.position.y - initial.y
-                if dx * dx + dy * dy > moveThreshold * moveThreshold {
-                    return true
-                }
-            }
-        }
-        return false
-    }
 }

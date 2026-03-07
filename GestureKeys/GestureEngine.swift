@@ -26,6 +26,22 @@ private func touchCallback(
     engine?.processTouches(touches, count: Int(touchCount), timestamp: timestamp)
 }
 
+// MARK: - NX_SYSDEFINED Constants
+
+/// CGEventType raw value for system-defined events (media keys, brightness, etc.)
+private let kNXEventTypeSysDefined: UInt32 = 14
+
+/// NSEvent subtype for special key events (media, brightness, illumination)
+private let kNXSubtypeSpecialKey: Int16 = 8
+
+/// NX key type constants (extracted from data1 field: `(data1 >> 16) & 0xFF`)
+private let kNXKeyTypeBrightnessUp: Int = 2
+private let kNXKeyTypeBrightnessDown: Int = 3
+
+/// Key event state masks within data1
+private let kNXKeyStateDown: Int = 0x0A00
+private let kNXKeyStateMask: Int = 0xFF00
+
 /// Global CGEventTap callback for intercepting mouse clicks
 private func eventTapCallback(
     proxy: CGEventTapProxy,
@@ -44,16 +60,16 @@ private func eventTapCallback(
     }
 
     // Shift + brightness key → keyboard backlight (no lock needed)
-    if type.rawValue == 14 {  // NX_SYSDEFINED
+    if type.rawValue == kNXEventTypeSysDefined {
         if event.flags.contains(.maskShift),
            let nsEvent = NSEvent(cgEvent: event),
-           nsEvent.subtype.rawValue == 8 {  // special key event
+           nsEvent.subtype.rawValue == kNXSubtypeSpecialKey {
             let data1 = nsEvent.data1
             let keyType = (data1 >> 16) & 0xFF
-            if keyType == 2 || keyType == 3 {  // brightness up/down
-                let isDown = (data1 & 0xFF00) == 0x0A00
+            if keyType == kNXKeyTypeBrightnessUp || keyType == kNXKeyTypeBrightnessDown {
+                let isDown = (data1 & kNXKeyStateMask) == kNXKeyStateDown
                 if isDown {
-                    if keyType == 2 {
+                    if keyType == kNXKeyTypeBrightnessUp {
                         KeySynthesizer.postKbBrightnessUp()
                     } else {
                         KeySynthesizer.postKbBrightnessDown()
@@ -98,6 +114,29 @@ private func eventTapCallback(
         return Unmanaged.passUnretained(event)
     }
 
+    // Suppress scroll events while 3+ fingers are active or after a 3-finger swipe fired.
+    // macOS generates scroll events from finger movement during 3-finger gestures,
+    // and momentum scroll continues for up to ~2s after fingers lift.
+    if type == .scrollWheel {
+        os_unfair_lock_lock(&engineLock)
+        let touchCount = engine.currentTouchCount
+        let timeSinceSwipe = ProcessInfo.processInfo.systemUptime - engine.lastSwipeFireTime
+        os_unfair_lock_unlock(&engineLock)
+        // Suppress during 3+ finger contact
+        if touchCount >= 3 {
+            return nil
+        }
+        // Suppress momentum scroll after swipe fire (phase 0 = user scroll, non-zero = momentum)
+        if timeSinceSwipe < 2.0 {
+            let momentumPhase = event.getIntegerValueField(.scrollWheelEventMomentumPhase)
+            // Suppress all scroll for first 0.3s, then only momentum scroll up to 2s
+            if timeSinceSwipe < 0.3 || momentumPhase != 0 {
+                return nil
+            }
+        }
+        return Unmanaged.passUnretained(event)
+    }
+
     guard type == .leftMouseDown else {
         return Unmanaged.passUnretained(event)
     }
@@ -108,14 +147,24 @@ private func eventTapCallback(
     // 5-finger click has highest priority (most fingers, least ambiguous)
     shouldSuppress = engine.fiveFingerClickRecognizer.handlePhysicalClick()
     if shouldSuppress {
-        // 5FC consumed the click — reset competing 5-finger recognizers
+        // 5FC consumed the click — reset competing 5-finger and 4-finger recognizers
         engine.fiveFingerTapRecognizer.reset()
         engine.fiveFingerLongPressRecognizer.reset()
+        engine.fourFingerDoubleTapRecognizer.reset()
+        engine.fourFingerLongPressRecognizer.reset()
     }
 
-    // 4-finger click (no conflict with other gestures)
+    // 4-finger click
     if !shouldSuppress {
-        shouldSuppress = engine.fourFingerRecognizer.handlePhysicalClick()
+        let fourClickResult = engine.fourFingerRecognizer.handlePhysicalClick()
+        if fourClickResult == .fired || fourClickResult == .clickHeld {
+            shouldSuppress = true
+            if fourClickResult == .clickHeld {
+                // Reset competing 4-finger recognizers during hold
+                engine.fourFingerDoubleTapRecognizer.reset()
+                engine.fourFingerLongPressRecognizer.reset()
+            }
+        }
     }
 
     if !shouldSuppress {
@@ -127,9 +176,21 @@ private func eventTapCallback(
             || engine.longPressWhileHoldingRecognizer.isActive
 
         if !holdPatternActive {
-            shouldSuppress = engine.threeFingerRecognizer.handlePhysicalClick()
-            if shouldSuppress {
+            let clickResult = engine.threeFingerRecognizer.handlePhysicalClick()
+            if clickResult == .fired {
+                shouldSuppress = true
                 // 3FC consumed the click — reset all competing recognizers
+                engine.tapWhileHoldingRecognizer.reset()
+                engine.swipeWhileHoldingRecognizer.reset()
+                engine.longPressWhileHoldingRecognizer.reset()
+                engine.threeFingerDoubleTapRecognizer.reset()
+                engine.threeFingerTripleTapRecognizer.reset()
+                engine.threeFingerLongPressRecognizer.reset()
+                engine.threeFingerSwipeRecognizer.reset()
+            } else if clickResult == .clickHeld {
+                shouldSuppress = true
+                // clickHeld: physical click differentiates from long press (no click).
+                // Reset all competing recognizers including long press.
                 engine.tapWhileHoldingRecognizer.reset()
                 engine.swipeWhileHoldingRecognizer.reset()
                 engine.longPressWhileHoldingRecognizer.reset()
@@ -164,6 +225,9 @@ final class GestureEngine {
 
     /// Posted when the system repeatedly disables the EventTap (likely stale permission).
     static let permissionIssueNotification = Notification.Name("GestureKeysPermissionIssue")
+
+    /// Posted when no multitouch devices are found at startup.
+    static let noDevicesNotification = Notification.Name("GestureKeysNoDevices")
 
     /// When true, gestures are recognized but not executed (test mode).
     static var monitorMode = false
@@ -201,6 +265,9 @@ final class GestureEngine {
     private var runLoopSource: CFRunLoopSource?
     private var isRunning = false
     private var deviceRecoveryTimer: Timer?
+    private var eventTapRetryTimer: Timer?
+    private var eventTapRetryCount = 0
+    private let maxEventTapRetries = 5
 
     /// True when Mission Control, Exposé, or Spaces transition is active.
     /// Updated on main thread via workspace notification; read from touch callback.
@@ -209,6 +276,18 @@ final class GestureEngine {
     /// Timestamp of the last externally-generated keyboard event (not our synthesis).
     /// Updated in the CGEventTap callback under `engineLock`. Used for typing suppression.
     fileprivate var lastExternalKeyTime: TimeInterval = 0
+    /// Current number of active touches, updated under engineLock by processTouches.
+    fileprivate var currentTouchCount: Int = 0
+    /// Timestamp when a 3-finger swipe last fired, used to suppress post-fire scroll momentum.
+    fileprivate var lastSwipeFireTime: TimeInterval = 0
+
+    /// Tracks whether 4/5-finger gesture was recently in .fired state.
+    /// Used to reset 3-finger recognizers once when transitioning from fired → idle.
+    private var wasHighFingerFired = false
+
+    /// When true, 4-finger recognizers are suppressed until all fingers lift.
+    /// Set when 5-finger contact is detected; cleared when activeCount == 0.
+    private var suppressFourFinger = false
 
     /// Number of keystrokes in the current typing burst (for burst detection).
     fileprivate var keystrokeCount: Int = 0
@@ -227,6 +306,9 @@ final class GestureEngine {
 
     func start() {
         guard !isRunning else { return }
+
+        // Verify MTTouch struct layout matches MultitouchSupport.framework
+        _ = MTTouch._sizeCheck
 
         os_unfair_lock_lock(&engineLock)
         engineInstance = self
@@ -247,14 +329,16 @@ final class GestureEngine {
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         deviceRecoveryTimer?.invalidate()
         deviceRecoveryTimer = nil
-        deferredDoubleTapItem?.cancel()
-        deferredDoubleTapItem = nil
+        eventTapRetryTimer?.invalidate()
+        eventTapRetryTimer = nil
         // Order matters: remove event tap first so callbacks can't fire on stopped devices.
         removeEventTap()
         stopMultitouchDevices()
 
         os_unfair_lock_lock(&engineLock)
         engineInstance = nil
+        deferredDoubleTapItem?.cancel()
+        deferredDoubleTapItem = nil
         deferredDoubleTapCancelled = true
         resetAllRecognizers()
         os_unfair_lock_unlock(&engineLock)
@@ -267,6 +351,7 @@ final class GestureEngine {
     /// Resets all gesture recognizers to idle state.
     /// Must be called while `engineLock` is held.
     private func resetAllRecognizers() {
+        suppressFourFinger = false
         threeFingerRecognizer.reset()
         fourFingerRecognizer.reset()
         tapWhileHoldingRecognizer.reset()
@@ -290,28 +375,41 @@ final class GestureEngine {
     /// Timestamp of the last reEnableEventTap log (throttle to every 5 seconds).
     private var lastReEnableLogTime: TimeInterval = 0
 
-    /// Re-enables the event tap if the system disabled it
+    /// Re-enables the event tap if the system disabled it.
+    /// Thread-safe: captures eventTap reference under engineLock.
     func reEnableEventTap() {
-        if let tap = eventTap {
+        os_unfair_lock_lock(&engineLock)
+        let tap = eventTap
+        let now = ProcessInfo.processInfo.systemUptime
+        var shouldLog = false
+        if now - lastReEnableLogTime > 5.0 {
+            lastReEnableLogTime = now
+            shouldLog = true
+        }
+        os_unfair_lock_unlock(&engineLock)
+
+        if let tap = tap {
             CGEvent.tapEnable(tap: tap, enable: true)
-            let now = ProcessInfo.processInfo.systemUptime
-            if now - lastReEnableLogTime > 5.0 {
+            if shouldLog {
                 NSLog("GestureKeys: Event tap re-enabled")
-                lastReEnableLogTime = now
             }
         }
     }
 
     /// Completely removes and recreates the EventTap.
     /// Called when repeated re-enable attempts fail (stale permission after reboot/rebuild).
+    /// Thread-safe: reads eventTapActive under engineLock after reinstall.
     private func reinstallEventTap() {
         NSLog("GestureKeys: Attempting EventTap reinstall...")
         removeEventTap()
         installEventTap()
-        if eventTapActive {
+
+        os_unfair_lock_lock(&engineLock)
+        let active = eventTapActive
+        os_unfair_lock_unlock(&engineLock)
+
+        if active {
             NSLog("GestureKeys: EventTap reinstall succeeded")
-            permissionIssuePosted = false
-            tapDisabledTimestamps.removeAll()
         } else {
             NSLog("GestureKeys: EventTap reinstall failed — falling back to notification")
         }
@@ -320,18 +418,29 @@ final class GestureEngine {
     /// Tracks repeated tapDisabledByTimeout events.
     /// If 3+ disables within 10 seconds, the permission is likely stale (rebuild).
     /// Automatically attempts EventTap reinstall before escalating to user notification.
+    /// Thread-safe: accesses tapDisabledTimestamps/permissionIssuePosted under engineLock.
     func trackTapDisabled() {
         let now = ProcessInfo.processInfo.systemUptime
-        tapDisabledTimestamps.append(now)
-        // Keep only events within the last 10 seconds
-        tapDisabledTimestamps = tapDisabledTimestamps.filter { now - $0 < 10.0 }
 
-        if tapDisabledTimestamps.count >= 3 && !permissionIssuePosted {
-            NSLog("GestureKeys: EventTap disabled %d times in 10s — attempting reinstall", tapDisabledTimestamps.count)
+        os_unfair_lock_lock(&engineLock)
+        tapDisabledTimestamps.append(now)
+        // Keep only events within the last 10 seconds (in-place removal avoids allocation)
+        tapDisabledTimestamps.removeAll { now - $0 >= 10.0 }
+        let shouldReinstall = tapDisabledTimestamps.count >= 3 && !permissionIssuePosted
+        let count = tapDisabledTimestamps.count
+        os_unfair_lock_unlock(&engineLock)
+
+        if shouldReinstall {
+            NSLog("GestureKeys: EventTap disabled %d times in 10s — attempting reinstall", count)
             reinstallEventTap()
             // If reinstall failed, escalate to user notification
-            if !eventTapActive {
+            os_unfair_lock_lock(&engineLock)
+            let active = eventTapActive
+            if !active {
                 permissionIssuePosted = true
+            }
+            os_unfair_lock_unlock(&engineLock)
+            if !active {
                 DispatchQueue.main.async {
                     NotificationCenter.default.post(name: Self.permissionIssueNotification, object: nil)
                 }
@@ -352,6 +461,7 @@ final class GestureEngine {
         if Self.monitorMode {
             GestureMonitor.shared.updateTouchCount(activeCount)
             GestureMonitor.shared.logTouchSizes(activeTouches)
+            GestureMonitor.shared.recordHeatmapPositions(activeTouches)
         }
 
         // Deferred double-tap scheduling flags (set under lock, used after unlock)
@@ -361,24 +471,32 @@ final class GestureEngine {
 
         os_unfair_lock_lock(&engineLock)
 
+        currentTouchCount = activeCount
+
+        // Pre-compute typing suppression values (used in 3 suppression checks below)
+        let config = GestureConfig.shared
+
+        // Snapshot sensitivity multipliers once per frame (replaces ~50 individual lock/unlock cycles)
+        config.updateFrameSnapshot()
+
         // Suppress gestures during Mission Control / Exposé / Spaces transition
         if systemUIActive {
             resetAllRecognizers()
             os_unfair_lock_unlock(&engineLock)
             return
         }
-
-        // Pre-compute typing suppression values (used in 3 suppression checks below)
-        let config = GestureConfig.shared
         let now = ProcessInfo.processInfo.systemUptime
         let timeSinceTyping = now - lastExternalKeyTime
-        let hasPeripheralTouch = config.cachedTypingSupprEnabled
+        // Snapshot typing suppression settings under enabledLock (written from main thread)
+        let typingSupprEnabled = config.typingSuppressionSnapshot.enabled
+        let typingSupprWindow = config.typingSuppressionSnapshot.window
+        let hasPeripheralTouch = typingSupprEnabled
             && activeTouches.contains { $0.isTypingEdge || $0.isPalmSized }
 
         // Typing suppression (palm rejection): zone-aware.
         // Only suppress peripheral/palm touches during typing window.
-        if config.cachedTypingSupprEnabled {
-            let baseWindow = config.cachedTypingSupprWindow
+        if typingSupprEnabled {
+            let baseWindow = typingSupprWindow
             let window = typingBurstActive ? max(baseWindow, 0.4) : baseWindow
 
             if timeSinceTyping < window && hasPeripheralTouch {
@@ -393,157 +511,22 @@ final class GestureEngine {
                 keystrokeCount = 0
             }
         }
-        // Click-based recognizers (skip when idle and below finger threshold)
-        if activeCount >= 3 || threeFingerRecognizer.state != .idle {
-            threeFingerRecognizer.processTouches(activeTouches, timestamp: timestamp)
-        }
-        if activeCount >= 4 || fourFingerRecognizer.state != .idle {
-            fourFingerRecognizer.processTouches(activeTouches, timestamp: timestamp)
-        }
-        if activeCount >= 5 || fiveFingerClickRecognizer.state != .idle {
-            fiveFingerClickRecognizer.processTouches(activeTouches, timestamp: timestamp)
-        }
-
         // 2-finger hold recognizers: suppress peripheral/palm touches during extended typing window
         let twoFingerSuppressed = hasPeripheralTouch
-            && timeSinceTyping < max(config.cachedTypingSupprWindow * 1.2, 0.4)
+            && timeSinceTyping < max(typingSupprWindow * 1.2, 0.4)
 
-        if twoFingerSuppressed {
-            tapWhileHoldingRecognizer.reset()
-            swipeWhileHoldingRecognizer.reset()
-            longPressWhileHoldingRecognizer.reset()
-        } else {
-            // Hold + tap/double-tap
-            tapWhileHoldingRecognizer.processTouches(activeTouches, timestamp: timestamp)
-
-            // Hold + swipe (fires reset TWH on swipe)
-            let swipeFired = swipeWhileHoldingRecognizer.processTouches(activeTouches, timestamp: timestamp)
-            if swipeFired {
-                tapWhileHoldingRecognizer.reset()
-                longPressWhileHoldingRecognizer.reset()
-            }
-
-            // Hold + long press (fires reset TWH and SWH)
-            let longPressFired = longPressWhileHoldingRecognizer.processTouches(activeTouches, timestamp: timestamp)
-            if longPressFired {
-                tapWhileHoldingRecognizer.reset()
-                swipeWhileHoldingRecognizer.reset()
-            }
-        }
-
-        // 3-finger gestures (skip when all idle and below finger threshold)
-        // 3FC (click) has highest priority — never reset by other 3-finger recognizers.
-        if activeCount >= 3 || threeFingerDoubleTapRecognizer.state != .idle || threeFingerTripleTapRecognizer.state != .idle || threeFingerLongPressRecognizer.state != .idle || threeFingerSwipeRecognizer.state != .idle {
-            let threeFingerSwipeFired = threeFingerSwipeRecognizer.processTouches(activeTouches, timestamp: timestamp)
-            if threeFingerSwipeFired {
-                // Swipe resets double-tap, triple-tap, and long-press, but NOT 3FC
-                threeFingerDoubleTapRecognizer.reset()
-                threeFingerTripleTapRecognizer.reset()
-                threeFingerLongPressRecognizer.reset()
-            }
-
-            // Process triple tap BEFORE double tap (state used for double tap suppression)
-            let tripleTapFired = threeFingerTripleTapRecognizer.processTouches(activeTouches, timestamp: timestamp)
-
-            // Suppress double tap fire when triple tap is tracking between 2nd and 3rd tap
-            let tripleEnabled = config.isEnabled("threeFingerTripleTap")
-            threeFingerDoubleTapRecognizer.suppressFire = tripleEnabled && threeFingerTripleTapRecognizer.state == .secondTapUp
-            threeFingerDoubleTapRecognizer.processTouches(activeTouches, timestamp: timestamp)
-            threeFingerDoubleTapRecognizer.suppressFire = false
-
-            // Deferred double tap: schedule delayed execution
-            if threeFingerDoubleTapRecognizer.didSuppressFire {
-                threeFingerDoubleTapRecognizer.didSuppressFire = false
-                deferredDoubleTapCancelled = false
-                scheduleDeferred = true
-                deferDelay = config.effectiveDoubleTapWindow
-            }
-
-            // Triple tap fired → cancel deferred double tap
-            if tripleTapFired {
-                deferredDoubleTapCancelled = true
-                cancelDeferred = true
-                threeFingerDoubleTapRecognizer.reset()
-            }
-
-            threeFingerLongPressRecognizer.processTouches(activeTouches, timestamp: timestamp)
-            if threeFingerLongPressRecognizer.state == .fired {
-                threeFingerDoubleTapRecognizer.reset()
-                threeFingerTripleTapRecognizer.reset()
-                threeFingerSwipeRecognizer.reset()
-            }
-        }
-
-        // 4-finger gestures (skip when all idle and below finger threshold)
-        if activeCount >= 4 || fourFingerDoubleTapRecognizer.state != .idle || fourFingerLongPressRecognizer.state != .idle {
-            fourFingerDoubleTapRecognizer.processTouches(activeTouches, timestamp: timestamp)
-            fourFingerLongPressRecognizer.processTouches(activeTouches, timestamp: timestamp)
-            if fourFingerLongPressRecognizer.state == .fired {
-                fourFingerDoubleTapRecognizer.reset()
-            }
-        }
-
-        // 5-finger gestures (skip when all idle and below finger threshold)
-        if activeCount >= 5 || fiveFingerTapRecognizer.state != .idle || fiveFingerLongPressRecognizer.state != .idle {
-            let tapFired = fiveFingerTapRecognizer.processTouches(activeTouches, timestamp: timestamp)
-            fiveFingerLongPressRecognizer.processTouches(activeTouches, timestamp: timestamp)
-            // Mutual exclusion: whichever fires first resets the others
-            if tapFired {
-                fiveFingerClickRecognizer.reset()
-                fiveFingerLongPressRecognizer.reset()
-                fourFingerLongPressRecognizer.reset()
-            }
-            if fiveFingerLongPressRecognizer.state == .fired {
-                fiveFingerTapRecognizer.reset()
-                fiveFingerClickRecognizer.reset()
-                fourFingerLongPressRecognizer.reset()
-            }
-        }
-
-        // Deferred display sleep: execute after fingers lift to prevent trackpad wake
-        if fiveFingerLongPressRecognizer.consumeLiftEvent() {
-            KeySynthesizer.pendingActions.append { KeySynthesizer.postSleepDisplay() }
-        }
-
-        // 1-finger hold + tap / swipe: suppress peripheral/palm touches during wider typing window
-        let oneFingerSuppressed = hasPeripheralTouch
-            && timeSinceTyping < max(config.cachedTypingSupprWindow * 1.5, 0.5)
-
-        if oneFingerSuppressed {
-            oneFingerHoldTapRecognizer.reset()
-            oneFingerHoldSwipeRecognizer.reset()
-        } else {
-            // Pass keyboard timestamp so recognizers can reject holds during typing
-            oneFingerHoldTapRecognizer.lastExternalKeyTime = lastExternalKeyTime
-            oneFingerHoldSwipeRecognizer.lastExternalKeyTime = lastExternalKeyTime
-            oneFingerHoldTapRecognizer.processTouches(activeTouches, timestamp: timestamp)
-            let ofhSwipeFired = oneFingerHoldSwipeRecognizer.processTouches(activeTouches, timestamp: timestamp)
-            if ofhSwipeFired {
-                oneFingerHoldTapRecognizer.reset()
-            }
-        }
-
-        // 2-finger standalone recognizers: also suppress during typing
-        if twoFingerSuppressed {
-            twoFingerSwipeRecognizer.reset()
-            twoFingerTapRecognizer.reset()
-        } else {
-            // 2-finger swipe (back/forward)
-            let twoFingerSwipeFired = twoFingerSwipeRecognizer.processTouches(activeTouches, timestamp: timestamp)
-            if twoFingerSwipeFired {
-                oneFingerHoldTapRecognizer.reset()
-                oneFingerHoldSwipeRecognizer.reset()
-                twoFingerTapRecognizer.reset()
-            }
-
-            // 2-finger double tap (cut)
-            twoFingerTapRecognizer.processTouches(activeTouches, timestamp: timestamp)
-        }
-        let pendingActions = KeySynthesizer.takePendingActions()
-        os_unfair_lock_unlock(&engineLock)
-        for action in pendingActions { action() }
-
-        // Deferred double-tap scheduling (outside lock)
+        processClickRecognizers(activeTouches, activeCount: activeCount, timestamp: timestamp)
+        processHoldRecognizers(activeTouches, activeCount: activeCount, timestamp: timestamp, suppressed: twoFingerSuppressed)
+        processThreeFingerGestures(activeTouches, activeCount: activeCount, timestamp: timestamp,
+                                   config: config, scheduleDeferred: &scheduleDeferred,
+                                   cancelDeferred: &cancelDeferred, deferDelay: &deferDelay)
+        processFourFingerGestures(activeTouches, activeCount: activeCount, timestamp: timestamp)
+        processFiveFingerGestures(activeTouches, activeCount: activeCount, timestamp: timestamp)
+        processOneFingerGestures(activeTouches, timestamp: timestamp,
+                                hasPeripheralTouch: hasPeripheralTouch,
+                                timeSinceTyping: timeSinceTyping, typingSupprWindow: typingSupprWindow)
+        processTwoFingerGestures(activeTouches, timestamp: timestamp, suppressed: twoFingerSuppressed)
+        // Deferred double-tap scheduling (under lock — cancel/create are lightweight)
         if cancelDeferred {
             deferredDoubleTapItem?.cancel()
             deferredDoubleTapItem = nil
@@ -567,6 +550,217 @@ final class GestureEngine {
             deferredDoubleTapItem = item
             DispatchQueue.main.asyncAfter(deadline: .now() + deferDelay, execute: item)
         }
+
+        let pendingActions = KeySynthesizer.takePendingActions()
+        os_unfair_lock_unlock(&engineLock)
+        for action in pendingActions { action() }
+    }
+
+    // MARK: - Recognizer Groups (called under engineLock)
+
+    /// Click-based recognizers (3FC, 4FC, 5FC) — physical trackpad click detection.
+    private func processClickRecognizers(_ activeTouches: [MTTouch], activeCount: Int, timestamp: Double) {
+        if activeCount >= 3 || threeFingerRecognizer.state != .idle {
+            threeFingerRecognizer.processTouches(activeTouches, timestamp: timestamp)
+        }
+        if activeCount >= 4 || fourFingerRecognizer.state != .idle {
+            fourFingerRecognizer.processTouches(activeTouches, timestamp: timestamp)
+        }
+        if activeCount >= 5 || fiveFingerClickRecognizer.state != .idle {
+            fiveFingerClickRecognizer.processTouches(activeTouches, timestamp: timestamp)
+        }
+    }
+
+    /// Two-finger hold + action recognizers (TWH, SWH, LPWH).
+    private func processHoldRecognizers(_ activeTouches: [MTTouch], activeCount: Int,
+                                        timestamp: Double, suppressed: Bool) {
+        if suppressed {
+            tapWhileHoldingRecognizer.reset()
+            swipeWhileHoldingRecognizer.reset()
+            longPressWhileHoldingRecognizer.reset()
+        } else {
+            tapWhileHoldingRecognizer.processTouches(activeTouches, timestamp: timestamp)
+
+            let swipeFired = swipeWhileHoldingRecognizer.processTouches(activeTouches, timestamp: timestamp)
+            if swipeFired {
+                tapWhileHoldingRecognizer.reset()
+                longPressWhileHoldingRecognizer.reset()
+            }
+
+            let longPressFired = longPressWhileHoldingRecognizer.processTouches(activeTouches, timestamp: timestamp)
+            if longPressFired {
+                tapWhileHoldingRecognizer.reset()
+                swipeWhileHoldingRecognizer.reset()
+            }
+        }
+    }
+
+    /// Three-finger gestures (swipe, double-tap, triple-tap, long-press) with deferred double-tap logic.
+    /// 3FC (click) has highest priority — never reset by other 3-finger recognizers.
+    private func processThreeFingerGestures(_ activeTouches: [MTTouch], activeCount: Int,
+                                            timestamp: Double, config: GestureConfig,
+                                            scheduleDeferred: inout Bool,
+                                            cancelDeferred: inout Bool,
+                                            deferDelay: inout TimeInterval) {
+        // Track 4/5-finger .fired state transitions.
+        // Reset 3-finger recognizers once when high-finger gesture ends,
+        // clearing partial state accumulated during finger lift.
+        let highFingerFired = fourFingerLongPressRecognizer.state == .fired
+            || fiveFingerLongPressRecognizer.state == .fired
+        if highFingerFired {
+            wasHighFingerFired = true
+        } else if wasHighFingerFired {
+            // Transition: fired → not fired. Reset 3-finger recognizers once.
+            wasHighFingerFired = false
+            threeFingerDoubleTapRecognizer.reset()
+            threeFingerTripleTapRecognizer.reset()
+            threeFingerLongPressRecognizer.reset()
+            threeFingerSwipeRecognizer.reset()
+        }
+
+        guard activeCount >= 3
+            || threeFingerDoubleTapRecognizer.state != .idle
+            || threeFingerTripleTapRecognizer.state != .idle
+            || threeFingerLongPressRecognizer.state != .idle
+            || threeFingerSwipeRecognizer.state != .idle else { return }
+
+        let swipeWasFired = threeFingerSwipeRecognizer.state == .fired
+        let threeFingerSwipeFired = threeFingerSwipeRecognizer.processTouches(activeTouches, timestamp: timestamp)
+        if threeFingerSwipeFired {
+            lastSwipeFireTime = ProcessInfo.processInfo.systemUptime
+        }
+        // Reset competing recognizers when swipe fires, stays in .fired, or just left .fired
+        // (the transition frame where .fired→.idle must also suppress doubleTap)
+        if threeFingerSwipeFired || threeFingerSwipeRecognizer.state == .fired || swipeWasFired {
+            threeFingerDoubleTapRecognizer.reset()
+            threeFingerTripleTapRecognizer.reset()
+            // Long press not reset here — it self-resets via its own movement check (0.03)
+        }
+
+        let tripleTapFired = threeFingerTripleTapRecognizer.processTouches(activeTouches, timestamp: timestamp)
+
+        let tripleEnabled = config.isEnabled("threeFingerTripleTap")
+        threeFingerDoubleTapRecognizer.suppressFire = tripleEnabled && threeFingerTripleTapRecognizer.state == .secondTapUp
+        threeFingerDoubleTapRecognizer.processTouches(activeTouches, timestamp: timestamp)
+        threeFingerDoubleTapRecognizer.suppressFire = false
+
+        if threeFingerDoubleTapRecognizer.didSuppressFire {
+            threeFingerDoubleTapRecognizer.didSuppressFire = false
+            deferredDoubleTapCancelled = false
+            scheduleDeferred = true
+            deferDelay = config.effectiveDoubleTapWindow
+        }
+
+        if tripleTapFired {
+            deferredDoubleTapCancelled = true
+            cancelDeferred = true
+            threeFingerDoubleTapRecognizer.reset()
+        }
+
+        // Skip long press when click recognizer is in clickHeld — physical click differentiates
+        if threeFingerRecognizer.state != .clickHeld {
+            threeFingerLongPressRecognizer.processTouches(activeTouches, timestamp: timestamp)
+        }
+        if threeFingerLongPressRecognizer.state == .fired {
+            threeFingerDoubleTapRecognizer.reset()
+            threeFingerTripleTapRecognizer.reset()
+            threeFingerSwipeRecognizer.reset()
+        }
+    }
+
+    /// Four-finger gestures (double-tap, long-press).
+    private func processFourFingerGestures(_ activeTouches: [MTTouch], activeCount: Int, timestamp: Double) {
+        // Suppress 4-finger gestures during and after 5-finger contact.
+        // Once 5 fingers are detected, 4-finger recognizers stay suppressed
+        // until ALL fingers lift — prevents false 4-finger fires from
+        // finger lift transitions (5→4) or firedTimeout expiry.
+        if activeCount >= 5
+            || fiveFingerLongPressRecognizer.state != .idle
+            || fiveFingerTapRecognizer.state != .idle
+            || fiveFingerClickRecognizer.state != .idle {
+            suppressFourFinger = true
+        }
+        if suppressFourFinger {
+            fourFingerDoubleTapRecognizer.reset()
+            fourFingerLongPressRecognizer.reset()
+            if activeCount == 0 { suppressFourFinger = false }
+            return
+        }
+
+        guard activeCount >= 4
+            || fourFingerDoubleTapRecognizer.state != .idle
+            || fourFingerLongPressRecognizer.state != .idle else { return }
+
+        fourFingerDoubleTapRecognizer.processTouches(activeTouches, timestamp: timestamp)
+        // Skip long press when click recognizer is in clickHeld — physical click differentiates
+        if fourFingerRecognizer.state != .clickHeld {
+            fourFingerLongPressRecognizer.processTouches(activeTouches, timestamp: timestamp)
+        }
+        if fourFingerLongPressRecognizer.state == .fired {
+            fourFingerDoubleTapRecognizer.reset()
+        }
+    }
+
+    /// Five-finger gestures (tap, long-press) + deferred display sleep.
+    private func processFiveFingerGestures(_ activeTouches: [MTTouch], activeCount: Int, timestamp: Double) {
+        if activeCount >= 5 || fiveFingerTapRecognizer.state != .idle || fiveFingerLongPressRecognizer.state != .idle {
+            let tapFired = fiveFingerTapRecognizer.processTouches(activeTouches, timestamp: timestamp)
+            fiveFingerLongPressRecognizer.processTouches(activeTouches, timestamp: timestamp)
+            if tapFired {
+                fiveFingerClickRecognizer.reset()
+                fiveFingerLongPressRecognizer.reset()
+                fourFingerLongPressRecognizer.reset()
+                fourFingerDoubleTapRecognizer.reset()
+            }
+            if fiveFingerLongPressRecognizer.state == .fired {
+                fiveFingerTapRecognizer.reset()
+                fiveFingerClickRecognizer.reset()
+                fourFingerLongPressRecognizer.reset()
+                fourFingerDoubleTapRecognizer.reset()
+            }
+        }
+
+        // Deferred display sleep: execute after fingers lift to prevent trackpad wake
+        if fiveFingerLongPressRecognizer.consumeLiftEvent() {
+            KeySynthesizer.appendPendingAction { KeySynthesizer.postSleepDisplay() }
+        }
+    }
+
+    /// One-finger hold + tap/swipe recognizers.
+    private func processOneFingerGestures(_ activeTouches: [MTTouch], timestamp: Double,
+                                          hasPeripheralTouch: Bool,
+                                          timeSinceTyping: TimeInterval,
+                                          typingSupprWindow: Double) {
+        let suppressed = hasPeripheralTouch && timeSinceTyping < max(typingSupprWindow * 1.5, 0.5)
+
+        if suppressed {
+            oneFingerHoldTapRecognizer.reset()
+            oneFingerHoldSwipeRecognizer.reset()
+        } else {
+            oneFingerHoldTapRecognizer.lastExternalKeyTime = lastExternalKeyTime
+            oneFingerHoldSwipeRecognizer.lastExternalKeyTime = lastExternalKeyTime
+            oneFingerHoldTapRecognizer.processTouches(activeTouches, timestamp: timestamp)
+            let ofhSwipeFired = oneFingerHoldSwipeRecognizer.processTouches(activeTouches, timestamp: timestamp)
+            if ofhSwipeFired {
+                oneFingerHoldTapRecognizer.reset()
+            }
+        }
+    }
+
+    /// Two-finger standalone recognizers (swipe, double-tap).
+    private func processTwoFingerGestures(_ activeTouches: [MTTouch], timestamp: Double, suppressed: Bool) {
+        if suppressed {
+            twoFingerSwipeRecognizer.reset()
+            twoFingerTapRecognizer.reset()
+        } else {
+            let twoFingerSwipeFired = twoFingerSwipeRecognizer.processTouches(activeTouches, timestamp: timestamp)
+            if twoFingerSwipeFired {
+                oneFingerHoldTapRecognizer.reset()
+                oneFingerHoldSwipeRecognizer.reset()
+                twoFingerTapRecognizer.reset()
+            }
+            twoFingerTapRecognizer.processTouches(activeTouches, timestamp: timestamp)
+        }
     }
 
     // MARK: - Multitouch Device Management
@@ -577,6 +771,9 @@ final class GestureEngine {
 
         if count == 0 {
             NSLog("GestureKeys: No multitouch devices found")
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: Self.noDevicesNotification, object: nil)
+            }
             return
         }
 
@@ -599,52 +796,80 @@ final class GestureEngine {
 
     // MARK: - CGEventTap Management
 
+
     private func installEventTap() {
+        eventTapRetryTimer?.invalidate()
+        eventTapRetryTimer = nil
+
+        // CGEvent.tapCreate is a system call — keep outside lock
+        var eventMask: CGEventMask = 0
+        eventMask |= (1 << CGEventType.leftMouseDown.rawValue)
+        eventMask |= (1 << CGEventType.keyDown.rawValue)
+        eventMask |= (1 << CGEventType.flagsChanged.rawValue)
+        eventMask |= (1 << CGEventType.scrollWheel.rawValue)
+        eventMask |= (1 << kNXEventTypeSysDefined)  // NX_SYSDEFINED
         let tap = CGEvent.tapCreate(
             tap: .cghidEventTap,
             place: .headInsertEventTap,
             options: .defaultTap,
-            eventsOfInterest: CGEventMask(
-                (1 << CGEventType.leftMouseDown.rawValue) |
-                (1 << CGEventType.keyDown.rawValue) |
-                (1 << CGEventType.flagsChanged.rawValue) |
-                (1 << 14)  // NX_SYSDEFINED — media/brightness keys
-            ),
+            eventsOfInterest: eventMask,
             callback: eventTapCallback,
             userInfo: nil
         )
 
         guard let tap = tap else {
-            NSLog("GestureKeys: Failed to create CGEventTap (check Accessibility permissions)")
+            os_unfair_lock_lock(&engineLock)
             eventTapActive = false
-            DispatchQueue.main.async {
-                NotificationCenter.default.post(name: Self.eventTapFailedNotification, object: nil)
+            eventTapRetryCount += 1
+            let retryCount = eventTapRetryCount
+            os_unfair_lock_unlock(&engineLock)
+
+            if retryCount <= maxEventTapRetries {
+                NSLog("GestureKeys: CGEventTap creation failed — retry %d/%d in 2s", retryCount, maxEventTapRetries)
+                eventTapRetryTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
+                    guard let self, self.isRunning else { return }
+                    self.installEventTap()
+                }
+            } else {
+                NSLog("GestureKeys: CGEventTap creation failed after %d retries", maxEventTapRetries)
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(name: Self.eventTapFailedNotification, object: nil)
+                }
             }
             return
         }
 
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+
+        os_unfair_lock_lock(&engineLock)
+        eventTapRetryCount = 0
         eventTap = tap
+        runLoopSource = source
         eventTapActive = true
         permissionIssuePosted = false
         tapDisabledTimestamps.removeAll()
-        NSLog("GestureKeys: CGEventTap created successfully")
+        os_unfair_lock_unlock(&engineLock)
 
-        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        runLoopSource = source
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-        CGEvent.tapEnable(tap: tap, enable: true)
+        NSLog("GestureKeys: CGEventTap created successfully")
     }
 
     private func removeEventTap() {
-        if let source = runLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
-            runLoopSource = nil
-        }
-        if let tap = eventTap {
-            CGEvent.tapEnable(tap: tap, enable: false)
-            eventTap = nil
-        }
+        os_unfair_lock_lock(&engineLock)
+        let source = runLoopSource
+        let tap = eventTap
+        runLoopSource = nil
+        eventTap = nil
         eventTapActive = false
+        os_unfair_lock_unlock(&engineLock)
+
+        if let source = source {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+        }
+        if let tap = tap {
+            CGEvent.tapEnable(tap: tap, enable: false)
+        }
     }
 
     // MARK: - System UI Detection
@@ -660,19 +885,78 @@ final class GestureEngine {
             self, selector: #selector(activeAppChanged),
             name: NSWorkspace.activeSpaceDidChangeNotification, object: nil
         )
+        // Sleep/wake handling: re-register devices and re-enable EventTap after wake
+        center.addObserver(
+            self, selector: #selector(handleSleep),
+            name: NSWorkspace.willSleepNotification, object: nil
+        )
+        center.addObserver(
+            self, selector: #selector(handleWake),
+            name: NSWorkspace.didWakeNotification, object: nil
+        )
     }
+
+    /// Bundle IDs of system UI processes where gestures should be suppressed.
+    private static let systemUIBundleIds: Set<String> = [
+        "com.apple.dock",                    // Mission Control, Exposé, Spaces
+        "com.apple.notificationcenterui",    // Notification Center, Stage Manager
+        "com.apple.controlcenter",           // Control Center overlay
+    ]
 
     @objc private func activeAppChanged(_ notification: Notification) {
         let bundleId = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-        let isDock = bundleId == "com.apple.dock"
+        let isSystemUI = bundleId.map { Self.systemUIBundleIds.contains($0) } ?? false
         os_unfair_lock_lock(&engineLock)
-        systemUIActive = isDock
+        systemUIActive = isSystemUI
         if bundleId != "com.gesturekeys.app" {
             GestureConfig.shared.lastExternalBundleId = bundleId
         }
         GestureConfig.shared.cachedFrontmostBundleId = bundleId
-        if isDock { resetAllRecognizers() }
+        if isSystemUI { resetAllRecognizers() }
         os_unfair_lock_unlock(&engineLock)
+    }
+
+    // MARK: - Sleep / Wake
+
+    @objc private func handleSleep(_ notification: Notification) {
+        NSLog("GestureKeys: System going to sleep — resetting recognizers")
+        os_unfair_lock_lock(&engineLock)
+        resetAllRecognizers()
+        lastExternalKeyTime = 0
+        typingBurstActive = false
+        keystrokeCount = 0
+        os_unfair_lock_unlock(&engineLock)
+    }
+
+    @objc private func handleWake(_ notification: Notification) {
+        guard isRunning else { return }
+        NSLog("GestureKeys: System woke — re-registering devices and re-enabling EventTap")
+
+        // Reset recognizer state (stale from before sleep)
+        os_unfair_lock_lock(&engineLock)
+        resetAllRecognizers()
+        os_unfair_lock_unlock(&engineLock)
+
+        // Unregister callbacks but do NOT call MTDeviceStop on potentially stale handles.
+        // After sleep, MultitouchSupport's internal thread (mt_ThreadedMTEntry) may
+        // concurrently release devices via __MTDeviceRelease → MTDeviceStop. Calling
+        // MTDeviceStop ourselves races with that cleanup: the first stop NULLs an
+        // internal field, and the second CFRelease(NULL) → EXC_BREAKPOINT crash.
+        for device in devices {
+            MTUnregisterContactFrameCallback(device, touchCallback)
+        }
+        devices.removeAll()
+
+        // Wait for MultitouchSupport's internal threads to fully settle, then
+        // create fresh device handles via MTDeviceCreateList.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            guard let self, self.isRunning else { return }
+            self.startMultitouchDevices()
+            NSLog("GestureKeys: Re-registered %d multitouch device(s) after wake", self.devices.count)
+        }
+
+        // Proactively re-enable EventTap (macOS may disable it during sleep)
+        reEnableEventTap()
     }
 
     // MARK: - Device Recovery
@@ -687,8 +971,19 @@ final class GestureEngine {
             let currentCount = CFArrayGetCount(rawList)
             if currentCount != self.devices.count {
                 NSLog("GestureKeys: Device count changed (%d → %ld), re-registering", self.devices.count, currentCount)
-                self.stopMultitouchDevices()
-                self.startMultitouchDevices()
+                os_unfair_lock_lock(&engineLock)
+                self.resetAllRecognizers()
+                os_unfair_lock_unlock(&engineLock)
+                // Unregister callbacks without MTDeviceStop — device handles may
+                // be stale if a device was disconnected (same race as handleWake).
+                for device in self.devices {
+                    MTUnregisterContactFrameCallback(device, touchCallback)
+                }
+                self.devices.removeAll()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                    guard let self, self.isRunning else { return }
+                    self.startMultitouchDevices()
+                }
             }
         }
     }

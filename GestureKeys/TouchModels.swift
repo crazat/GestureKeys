@@ -59,6 +59,15 @@ struct MTTouch {
     var zDensity: Float            // offset 92  (4 bytes)
     // total: 96 bytes
 
+    // Compile-time verification: MTTouch must be exactly 96 bytes to match
+    // the C struct layout from MultitouchSupport.framework.
+    static let _sizeCheck: Void = {
+        assert(MemoryLayout<MTTouch>.size == 96,
+               "MTTouch size mismatch: expected 96, got \(MemoryLayout<MTTouch>.size)")
+        assert(MemoryLayout<MTTouch>.stride == 96,
+               "MTTouch stride mismatch: expected 96, got \(MemoryLayout<MTTouch>.stride)")
+    }()
+
     var touchState: TouchState {
         TouchState(rawValue: state) ?? .notTracking
     }
@@ -97,4 +106,76 @@ struct MTTouch {
     var isPalmSized: Bool {
         majorAxis > 10.0
     }
+}
+
+// MARK: - Trackpad Zone
+
+/// Left/right zone classification based on normalized x coordinate.
+enum TrackpadZone: String {
+    case left
+    case right
+
+    /// Determines zone from a normalized x coordinate (0.0–1.0).
+    static func from(x: Float) -> TrackpadZone {
+        x < 0.5 ? .left : .right
+    }
+}
+
+extension MTTouch {
+    /// The trackpad zone this touch falls in.
+    var zone: TrackpadZone {
+        TrackpadZone.from(x: normalizedVector.position.x)
+    }
+}
+
+// MARK: - Shared Movement Detection
+
+/// Checks if any touch has moved beyond a threshold from its initial position.
+/// Used by click/tap/long-press recognizers to distinguish taps from swipes.
+/// - Parameters:
+///   - activeTouches: Current active touches
+///   - initialPositions: Dictionary mapping pathIndex to initial (x, y)
+///   - threshold: Maximum allowed movement (normalized, squared comparison)
+/// - Returns: True if any tracked touch exceeded the threshold
+func hasExcessiveMovement(_ activeTouches: [MTTouch],
+                          initialPositions: [Int32: (x: Float, y: Float)],
+                          threshold: Float) -> Bool {
+    let thresholdSq = threshold * threshold
+    for touch in activeTouches {
+        if let initial = initialPositions[touch.pathIndex] {
+            let dx = touch.normalizedVector.position.x - initial.x
+            let dy = touch.normalizedVector.position.y - initial.y
+            if dx * dx + dy * dy > thresholdSq {
+                return true
+            }
+        }
+    }
+    return false
+}
+
+/// Single-finger variant for recognizers that track one hold finger's initial position.
+/// Used by OneFingerHoldTap and OneFingerHoldSwipe recognizers.
+func hasExcessiveMovement(_ finger: MTTouch,
+                          initialX: Float, initialY: Float,
+                          threshold: Float) -> Bool {
+    let dx = finger.normalizedVector.position.x - initialX
+    let dy = finger.normalizedVector.position.y - initialY
+    return dx * dx + dy * dy > threshold * threshold
+}
+
+/// Array-based variant for recognizers that store initial positions as tuples.
+func hasExcessiveMovement(_ activeTouches: [MTTouch],
+                          initialPositions: [(pathIndex: Int32, x: Float, y: Float)],
+                          threshold: Float) -> Bool {
+    let thresholdSq = threshold * threshold
+    for touch in activeTouches {
+        if let initial = initialPositions.first(where: { $0.pathIndex == touch.pathIndex }) {
+            let dx = touch.normalizedVector.position.x - initial.x
+            let dy = touch.normalizedVector.position.y - initial.y
+            if dx * dx + dy * dy > thresholdSq {
+                return true
+            }
+        }
+    }
+    return false
 }

@@ -1,13 +1,17 @@
 import Foundation
 
-/// Recognizes four-finger physical click → toggle fullscreen (Cmd+Ctrl+F).
+/// Recognizes four-finger physical click on trackpad.
+/// Short click → toggle fullscreen (⌃⌘F). Long hold click → hide app (⌘H).
 ///
 /// State machine:
 /// ```
 /// [Idle] → 4 active touches → [FourDown]
-/// [FourDown] + physical click → fire → [Cooldown]
+/// [FourDown] + physical click (if longClick enabled) → [ClickHeld]
+/// [FourDown] + physical click (if longClick disabled) → fire normal → [Cooldown]
+/// [ClickHeld] + fingers lift before holdDuration → fire normal click → [Cooldown]
+/// [ClickHeld] + holdDuration elapsed with fingers still down → fire long click → [Cooldown]
 /// [FourDown] + 5+ fingers → [Idle]
-/// [FourDown] + fingers < 4 → [Idle]
+/// [FourDown] + fingers < 4 → [Idle] (after grace period)
 /// [Cooldown] (200ms) → [Idle]
 /// ```
 final class FourFingerClickRecognizer {
@@ -15,6 +19,7 @@ final class FourFingerClickRecognizer {
     enum State {
         case idle
         case fourDown
+        case clickHeld
         case cooldown
     }
 
@@ -24,8 +29,12 @@ final class FourFingerClickRecognizer {
     private let cooldownDuration: TimeInterval = 0.2
     private let gracePeriod: TimeInterval = 0.200
 
+    /// How long the user must hold after clicking to trigger long click action.
+    private let holdDuration: TimeInterval = 0.5
+
     private var initialPositions: [Int32: (x: Float, y: Float)] = [:]
     private var cooldownStart: TimeInterval = 0
+    private var clickHeldStart: TimeInterval = 0
     private var dropTime: TimeInterval = 0
     private(set) var activeTouchCount: Int = 0
 
@@ -39,6 +48,7 @@ final class FourFingerClickRecognizer {
                 for touch in activeTouches {
                     initialPositions[touch.pathIndex] = (x: touch.normalizedVector.position.x, y: touch.normalizedVector.position.y)
                 }
+                dropTime = 0
                 state = .fourDown
             }
 
@@ -53,8 +63,34 @@ final class FourFingerClickRecognizer {
                 return
             }
             dropTime = 0
-            if hasExcessiveMovement(activeTouches) {
+            if hasExcessiveMovement(activeTouches, initialPositions: initialPositions, threshold: moveThreshold) {
                 state = .idle
+            }
+
+        case .clickHeld:
+            let now = ProcessInfo.processInfo.systemUptime
+
+            // Fingers lifted → fire normal click
+            if activeTouches.count < 4 {
+                fireNormalClick()
+                return
+            }
+
+            // 5+ fingers → cancel
+            if activeTouches.count > 4 {
+                state = .idle
+                return
+            }
+
+            // Held long enough → fire long click (hide app)
+            if now - clickHeldStart >= holdDuration {
+                if GestureConfig.shared.isEnabled("fourFingerLongClick") {
+                    KeySynthesizer.fireAction(gestureId: "fourFingerLongClick")
+                    state = .cooldown
+                    cooldownStart = now
+                } else {
+                    fireNormalClick()
+                }
             }
 
         case .cooldown:
@@ -64,10 +100,28 @@ final class FourFingerClickRecognizer {
         }
     }
 
+    enum ClickResult {
+        case none
+        case fired
+        case clickHeld
+    }
+
     /// Called by GestureEngine when a physical click is detected.
-    /// Returns true if the click should be suppressed.
-    func handlePhysicalClick() -> Bool {
-        guard state == .fourDown else { return false }
+    func handlePhysicalClick() -> ClickResult {
+        guard state == .fourDown else { return .none }
+
+        // If long click gesture is enabled, defer to measure hold duration
+        if GestureConfig.shared.isEnabled("fourFingerLongClick") {
+            state = .clickHeld
+            clickHeldStart = ProcessInfo.processInfo.systemUptime
+            return .clickHeld
+        }
+
+        return fireNormalClick() ? .fired : .none
+    }
+
+    @discardableResult
+    private func fireNormalClick() -> Bool {
         guard GestureConfig.shared.isEnabled("fourFingerClick") else {
             state = .idle
             return false
@@ -85,20 +139,6 @@ final class FourFingerClickRecognizer {
         activeTouchCount = 0
         dropTime = 0
         cooldownStart = 0
-    }
-
-    // MARK: - Private
-
-    private func hasExcessiveMovement(_ activeTouches: [MTTouch]) -> Bool {
-        for touch in activeTouches {
-            if let initial = initialPositions[touch.pathIndex] {
-                let dx = touch.normalizedVector.position.x - initial.x
-                let dy = touch.normalizedVector.position.y - initial.y
-                if dx * dx + dy * dy > moveThreshold * moveThreshold {
-                    return true
-                }
-            }
-        }
-        return false
+        clickHeldStart = 0
     }
 }

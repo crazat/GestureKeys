@@ -1,13 +1,12 @@
 import SwiftUI
 import AppKit
-import ServiceManagement
 
 // MARK: - SwiftUI Settings View
 
 struct SettingsView: View {
     @ObservedObject var config = GestureConfig.shared
     @State private var hasPermission = AXIsProcessTrusted()
-    @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
+    @State private var launchAtLogin = LaunchAtLoginHelper.isEnabled
     @State private var showingAppOverrides = false
     @State private var searchText = ""
     @State private var expandedCategories: Set<String> = []
@@ -67,16 +66,8 @@ struct SettingsView: View {
                         .toggleStyle(.switch)
                         .controlSize(.small)
                         .onChange(of: launchAtLogin) { newValue in
-                            do {
-                                if newValue {
-                                    try SMAppService.mainApp.register()
-                                } else {
-                                    try SMAppService.mainApp.unregister()
-                                }
-                            } catch {
-                                NSLog("GestureKeys: Launch at login error: %@", error.localizedDescription)
-                                launchAtLogin = SMAppService.mainApp.status == .enabled
-                            }
+                            LaunchAtLoginHelper.setEnabled(newValue)
+                            launchAtLogin = LaunchAtLoginHelper.isEnabled
                         }
 
                     Text("로그인 시 자동 시작")
@@ -178,6 +169,29 @@ struct SettingsView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                 }
+
+                Divider().padding(.leading, 44)
+
+                HStack(spacing: 12) {
+                    Toggle("", isOn: Binding(
+                        get: { config.cooldownEnabled },
+                        set: { config.cooldownEnabled = $0 }
+                    ))
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("제스처 쿨다운")
+                            .font(.body)
+                        Text("같은 제스처의 연속 발동을 방지합니다")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
 
                 Divider().padding(.leading, 44)
 
@@ -442,6 +456,17 @@ private struct GestureRowView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
+            if GestureConfig.zoneCapableGestures.contains(gesture.id) {
+                ZoneConfigView(gestureId: gesture.id, config: config)
+            }
+
+            if config.actionFor(gesture.id) == .shortcut {
+                HStack(spacing: 12) {
+                    Spacer().frame(width: 32)
+                    ShortcutNameView(gestureId: gesture.id, config: config)
+                }
+            }
+
             if config.actionFor(gesture.id) == .custom {
                 HStack(spacing: 12) {
                     Spacer().frame(width: 32)
@@ -451,6 +476,87 @@ private struct GestureRowView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+}
+
+// MARK: - Zone Config View
+
+private struct ZoneConfigView: View {
+    let gestureId: String
+    @ObservedObject var config: GestureConfig
+
+    var body: some View {
+        VStack(spacing: 4) {
+            HStack(spacing: 12) {
+                Spacer().frame(width: 32)
+                Toggle("존 기반 액션", isOn: Binding(
+                    get: { config.zonesEnabled(for: gestureId) },
+                    set: { config.setZonesEnabled(for: gestureId, enabled: $0) }
+                ))
+                .controlSize(.small)
+                .font(.caption)
+                Spacer()
+            }
+
+            if config.zonesEnabled(for: gestureId) {
+                HStack(spacing: 12) {
+                    Spacer().frame(width: 44)
+                    VStack(alignment: .leading, spacing: 4) {
+                        zonePicker(zone: .left, label: "왼쪽")
+                        zonePicker(zone: .right, label: "오른쪽")
+                    }
+                }
+            }
+        }
+    }
+
+    private func zonePicker(zone: TrackpadZone, label: String) -> some View {
+        HStack(spacing: 6) {
+            Text(label)
+                .font(.caption)
+                .frame(width: 40, alignment: .trailing)
+            Picker("", selection: Binding(
+                get: { config.zoneAction(for: gestureId, zone: zone) ?? config.actionFor(gestureId) },
+                set: { config.setZoneAction(for: gestureId, zone: zone, action: $0) }
+            )) {
+                ForEach(KeySynthesizer.Action.allCases) { action in
+                    Text(action.displayName).tag(action)
+                }
+            }
+            .labelsHidden()
+            .controlSize(.mini)
+        }
+    }
+}
+
+// MARK: - Shortcut Name View
+
+private struct ShortcutNameView: View {
+    let gestureId: String
+    @ObservedObject var config: GestureConfig
+    @State private var name: String = ""
+
+    var body: some View {
+        HStack(spacing: 8) {
+            TextField("Shortcut 이름", text: $name)
+                .textFieldStyle(.roundedBorder)
+                .controlSize(.small)
+                .onAppear { name = config.shortcutName(for: gestureId) ?? "" }
+                .onSubmit { config.setShortcutName(for: gestureId, name: name) }
+                .onChange(of: name) { newValue in
+                    config.setShortcutName(for: gestureId, name: newValue)
+                }
+
+            Button(action: {
+                KeySynthesizer.executeShortcut(gestureId: gestureId)
+            }) {
+                Image(systemName: "play.circle")
+                    .foregroundColor(.accentColor)
+            }
+            .buttonStyle(.plain)
+            .help("Shortcut 테스트 실행")
+            .disabled(name.isEmpty)
+        }
     }
 }
 

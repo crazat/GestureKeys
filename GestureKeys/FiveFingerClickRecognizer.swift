@@ -1,6 +1,6 @@
 import Foundation
 
-/// Recognizes five-finger physical click → app quit (⌘Q).
+/// Recognizes five-finger physical click → force quit (⌥⌘Esc).
 ///
 /// State machine:
 /// ```
@@ -36,6 +36,7 @@ final class FiveFingerClickRecognizer {
                 for touch in activeTouches {
                     initialPositions[touch.pathIndex] = (x: touch.normalizedVector.position.x, y: touch.normalizedVector.position.y)
                 }
+                dropTime = 0
                 state = .fiveDown
             }
 
@@ -50,7 +51,7 @@ final class FiveFingerClickRecognizer {
                 return
             }
             dropTime = 0
-            if hasExcessiveMovement(activeTouches) {
+            if hasExcessiveMovement(activeTouches, initialPositions: initialPositions, threshold: moveThreshold) {
                 state = .idle
             }
 
@@ -81,18 +82,5 @@ final class FiveFingerClickRecognizer {
         initialPositions.removeAll(keepingCapacity: true)
         dropTime = 0
         cooldownStart = 0
-    }
-
-    private func hasExcessiveMovement(_ activeTouches: [MTTouch]) -> Bool {
-        for touch in activeTouches {
-            if let initial = initialPositions[touch.pathIndex] {
-                let dx = touch.normalizedVector.position.x - initial.x
-                let dy = touch.normalizedVector.position.y - initial.y
-                if dx * dx + dy * dy > moveThreshold * moveThreshold {
-                    return true
-                }
-            }
-        }
-        return false
     }
 }

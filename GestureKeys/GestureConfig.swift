@@ -49,8 +49,12 @@ final class GestureConfig: ObservableObject {
         Category(id: "windows", title: "창 관리", icon: "macwindow", gestures: [
             Info(id: "threeFingerClick",      name: "세 손가락 클릭",             action: "탭 닫기 (⌘W)",               defaultEnabled: true,
                  howTo: "세 손가락을 트랙패드에 올린 뒤, 물리적으로 트랙패드를 꾹 눌러 클릭하세요."),
+            Info(id: "threeFingerLongClick",  name: "세 손가락 길게 클릭",         action: "앱 종료 (⌘Q)",               defaultEnabled: false,
+                 howTo: "세 손가락을 트랙패드에 올린 뒤 클릭하고 0.5초간 유지하세요. 바로 떼면 탭 닫기입니다."),
             Info(id: "fourFingerClick",       name: "네 손가락 클릭",             action: "전체화면 토글 (⌃⌘F)",        defaultEnabled: true,
                  howTo: "네 손가락을 트랙패드에 올린 뒤, 물리적으로 트랙패드를 꾹 눌러 클릭하세요."),
+            Info(id: "fourFingerLongClick",  name: "네 손가락 길게 클릭",         action: "앱 숨기기 (⌘H)",            defaultEnabled: false,
+                 howTo: "네 손가락을 트랙패드에 올린 뒤 클릭하고 0.5초간 유지하세요. 바로 떼면 전체화면 토글입니다."),
             Info(id: "swhUp",               name: "홀드 + 스와이프 ↑",          action: "새 창 (⌘N)",                defaultEnabled: true,
                  howTo: "두 손가락을 트랙패드에 올려 유지한 뒤, 왼쪽의 세 번째 손가락으로 위로 밀어주세요."),
             Info(id: "swhDown",             name: "홀드 + 스와이프 ↓",          action: "최소화 (⌘M)",               defaultEnabled: true,
@@ -67,6 +71,14 @@ final class GestureConfig: ObservableObject {
                  howTo: "세 손가락을 동시에 빠르게 위로 밀어주세요. 수직 방향이 수평보다 2.5배 이상 커야 합니다."),
             Info(id: "threeFingerSwipeDown", name: "세 손가락 스와이프 ↓",        action: "페이지 하단 (⌘↓)",          defaultEnabled: false,
                  howTo: "세 손가락을 동시에 빠르게 아래로 밀어주세요. 수직 방향이 수평보다 2.5배 이상 커야 합니다."),
+            Info(id: "threeFingerSwipeDiagUpRight", name: "세 손가락 대각선 ↗",   action: "Spotlight (⌘Space)",        defaultEnabled: false,
+                 howTo: "세 손가락을 동시에 빠르게 오른쪽 위 대각선으로 밀어주세요."),
+            Info(id: "threeFingerSwipeDiagUpLeft",  name: "세 손가락 대각선 ↖",   action: "검색 (⌘F)",                defaultEnabled: false,
+                 howTo: "세 손가락을 동시에 빠르게 왼쪽 위 대각선으로 밀어주세요."),
+            Info(id: "threeFingerSwipeDiagDownRight", name: "세 손가락 대각선 ↘", action: "페이지 하단 (⌘↓)",         defaultEnabled: false,
+                 howTo: "세 손가락을 동시에 빠르게 오른쪽 아래 대각선으로 밀어주세요."),
+            Info(id: "threeFingerSwipeDiagDownLeft",  name: "세 손가락 대각선 ↙", action: "페이지 상단 (⌘↑)",         defaultEnabled: false,
+                 howTo: "세 손가락을 동시에 빠르게 왼쪽 아래 대각선으로 밀어주세요."),
         ]),
         Category(id: "editing", title: "편집", icon: "pencil", gestures: [
             Info(id: "twoFingerDoubleTap",   name: "두 손가락 더블탭",            action: "잘라내기 (⌘X)",              defaultEnabled: true,
@@ -75,7 +87,7 @@ final class GestureConfig: ObservableObject {
                  howTo: "세 손가락을 동시에 빠르게 두 번 탭하세요."),
             Info(id: "threeFingerLongPress", name: "세 손가락 길게 누르기",        action: "복사 (⌘C)",                  defaultEnabled: true,
                  howTo: "세 손가락을 트랙패드에 올리고 0.5초 이상 움직이지 않고 유지하세요."),
-            Info(id: "threeFingerTripleTap", name: "세 손가락 트리플탭",         action: "실행 취소 (⌘Z)",             defaultEnabled: true,
+            Info(id: "threeFingerTripleTap", name: "세 손가락 트리플탭",         action: "실행 취소 (⌘Z)",             defaultEnabled: false,
                  howTo: "세 손가락을 동시에 빠르게 세 번 탭하세요."),
             Info(id: "twhLeftLongPress",     name: "홀드 + 왼쪽 길게 누르기",     action: "다시 실행 (⇧⌘Z)",            defaultEnabled: false,
                  howTo: "두 손가락을 트랙패드에 올려 유지한 뒤, 왼쪽에서 세 번째 손가락을 0.3초 이상 누르고 있으세요."),
@@ -99,7 +111,7 @@ final class GestureConfig: ObservableObject {
                  howTo: "네 손가락을 트랙패드에 올리고 0.5초 이상 움직이지 않고 유지하세요."),
             Info(id: "fiveFingerTap",        name: "다섯 손가락 탭",             action: "잠금화면 (⌃⌘Q)",             defaultEnabled: false,
                  howTo: "다섯 손가락을 동시에 트랙패드에 올렸다가 빠르게 떼세요. 0.4초 이내에 완료해야 합니다."),
-            Info(id: "fiveFingerClick",      name: "다섯 손가락 클릭",           action: "앱 종료 (⌘Q)",               defaultEnabled: false,
+            Info(id: "fiveFingerClick",      name: "다섯 손가락 클릭",           action: "강제 종료 (⌥⌘Esc)",          defaultEnabled: false,
                  howTo: "다섯 손가락을 트랙패드에 올린 뒤, 물리적으로 트랙패드를 꾹 눌러 클릭하세요."),
             Info(id: "fiveFingerLongPress", name: "다섯 손가락 길게 누르기",     action: "화면 끄기",                   defaultEnabled: false,
                  howTo: "다섯 손가락을 트랙패드에 올리고 0.5초 이상 움직이지 않고 유지하세요."),
@@ -140,20 +152,70 @@ final class GestureConfig: ObservableObject {
     /// Cached action mappings — avoids UserDefaults reads and string interpolation under engine lock.
     private var actionCache: [String: KeySynthesizer.Action] = [:]
 
-    /// Cached frontmost app bundle ID (updated by GestureEngine on main thread under lock).
-    /// Read from touch callback thread under the same lock — thread-safe.
-    var cachedFrontmostBundleId: String?
+    /// Cached frontmost app bundle ID (updated by GestureEngine under engineLock).
+    /// Protected by enabledLock for consistent reads from isEnabled().
+    var cachedFrontmostBundleId: String? {
+        get {
+            os_unfair_lock_lock(&enabledLock)
+            defer { os_unfair_lock_unlock(&enabledLock) }
+            return _cachedFrontmostBundleId
+        }
+        set {
+            os_unfair_lock_lock(&enabledLock)
+            _cachedFrontmostBundleId = newValue
+            os_unfair_lock_unlock(&enabledLock)
+        }
+    }
+    private var _cachedFrontmostBundleId: String?
 
     /// Last frontmost bundle ID that wasn't GestureKeys itself.
     /// Used by AppOverrideView "현재 앱" button to avoid capturing our own app.
     var lastExternalBundleId: String?
 
     /// Cached multiplier values for hot-path reads (updated on settings change).
-    private(set) var cachedTapSpeed: Double = 1.0
-    private(set) var cachedSwipeMultiplier: Double = 1.0
-    private(set) var cachedMoveMultiplier: Double = 1.0
-    private(set) var cachedTypingSupprEnabled: Bool = true
-    private(set) var cachedTypingSupprWindow: Double = 0.3
+    /// Protected by enabledLock — write via refreshCache(), read via effective* accessors.
+    private var cachedTapSpeed: Double = 1.0
+    private var cachedSwipeMultiplier: Double = 1.0
+    private var cachedMoveMultiplier: Double = 1.0
+    private var cachedTypingSupprEnabled: Bool = true
+    private var cachedTypingSupprWindow: Double = 0.3
+
+    /// Thread-safe snapshot of typing suppression settings (single lock acquisition).
+    var typingSuppressionSnapshot: (enabled: Bool, window: Double) {
+        os_unfair_lock_lock(&enabledLock)
+        let e = cachedTypingSupprEnabled
+        let w = cachedTypingSupprWindow
+        os_unfair_lock_unlock(&enabledLock)
+        return (e, w)
+    }
+
+    /// Per-frame snapshot of all sensitivity multipliers (single lock acquisition).
+    /// Call once per touch frame, then pass to recognizers to avoid ~50 individual lock/unlock cycles.
+    struct SensitivitySnapshot {
+        let tapSpeed: Double
+        let swipeMultiplier: Double
+        let moveMultiplier: Double
+
+        func maxTapDuration() -> TimeInterval { 0.250 * tapSpeed }
+        func doubleTapWindow() -> TimeInterval { 0.400 * tapSpeed }
+        func multiTapWindow() -> TimeInterval { 0.350 * tapSpeed }
+        func holdStability() -> TimeInterval { 0.100 * tapSpeed }
+        func longPressDuration(base: Double) -> TimeInterval { base * tapSpeed }
+        func swipeThreshold(base: Float) -> Float { base * Float(swipeMultiplier) }
+        func moveThreshold(base: Float) -> Float { base * Float(moveMultiplier) }
+    }
+
+    /// Thread-safe snapshot of all cached multipliers (single lock acquisition per frame).
+    var sensitivitySnapshot: SensitivitySnapshot {
+        os_unfair_lock_lock(&enabledLock)
+        let snap = SensitivitySnapshot(
+            tapSpeed: cachedTapSpeed,
+            swipeMultiplier: cachedSwipeMultiplier,
+            moveMultiplier: cachedMoveMultiplier
+        )
+        os_unfair_lock_unlock(&enabledLock)
+        return snap
+    }
 
     private init() {
         for info in Self.all {
@@ -178,6 +240,15 @@ final class GestureConfig: ObservableObject {
         refreshCache()
         cachedHudEnabled = UserDefaults.standard.object(forKey: "hudEnabled") as? Bool ?? false
         cachedHapticEnabled = UserDefaults.standard.object(forKey: "hapticEnabled") as? Bool ?? true
+        cachedCooldownEnabled = UserDefaults.standard.object(forKey: "cooldownEnabled") as? Bool ?? false
+        loadCooldownOverrides()
+
+        // Pre-populate app overrides cache to avoid first-access allocation under lock
+        if let dict = UserDefaults.standard.dictionary(forKey: "appOverrides") as? [String: [String]] {
+            cachedAppOverrides = dict.mapValues { Set($0) }
+        } else {
+            cachedAppOverrides = [:]
+        }
     }
 
     /// Clamps a value to a valid range.
@@ -186,12 +257,21 @@ final class GestureConfig: ObservableObject {
     }
 
     /// Refreshes cached values from UserDefaults (with bounds validation).
+    /// Thread-safe: writes under enabledLock to synchronize with touch callback reads.
     func refreshCache() {
-        cachedTapSpeed = Self.clamp(UserDefaults.standard.object(forKey: "tapSpeedMultiplier") as? Double ?? 1.0, 0.5, 2.0)
-        cachedSwipeMultiplier = Self.clamp(UserDefaults.standard.object(forKey: "swipeThresholdMultiplier") as? Double ?? 1.0, 0.5, 2.0)
-        cachedMoveMultiplier = Self.clamp(UserDefaults.standard.object(forKey: "moveThresholdMultiplier") as? Double ?? 1.0, 0.5, 2.0)
-        cachedTypingSupprEnabled = UserDefaults.standard.object(forKey: "typingSuppressionEnabled") as? Bool ?? true
-        cachedTypingSupprWindow = Self.clamp(UserDefaults.standard.object(forKey: "typingSuppressionWindow") as? Double ?? 0.3, 0.1, 1.0)
+        let tapSpeed = Self.clamp(UserDefaults.standard.object(forKey: "tapSpeedMultiplier") as? Double ?? 1.0, 0.5, 2.0)
+        let swipeMult = Self.clamp(UserDefaults.standard.object(forKey: "swipeThresholdMultiplier") as? Double ?? 1.0, 0.5, 2.0)
+        let moveMult = Self.clamp(UserDefaults.standard.object(forKey: "moveThresholdMultiplier") as? Double ?? 1.0, 0.5, 2.0)
+        let typingEnabled = UserDefaults.standard.object(forKey: "typingSuppressionEnabled") as? Bool ?? true
+        let typingWindow = Self.clamp(UserDefaults.standard.object(forKey: "typingSuppressionWindow") as? Double ?? 0.3, 0.1, 1.0)
+
+        os_unfair_lock_lock(&enabledLock)
+        cachedTapSpeed = tapSpeed
+        cachedSwipeMultiplier = swipeMult
+        cachedMoveMultiplier = moveMult
+        cachedTypingSupprEnabled = typingEnabled
+        cachedTypingSupprWindow = typingWindow
+        os_unfair_lock_unlock(&enabledLock)
     }
 
     // MARK: - API
@@ -201,11 +281,12 @@ final class GestureConfig: ObservableObject {
     func isEnabled(_ id: String) -> Bool {
         os_unfair_lock_lock(&enabledLock)
         let globalEnabled = enabledCache[id] ?? (Self.defaultEnabledMap[id] ?? false)
+        let bundleId = _cachedFrontmostBundleId
         os_unfair_lock_unlock(&enabledLock)
         guard globalEnabled else { return false }
 
-        // Check per-app override (uses cached bundleId, updated by GestureEngine under lock)
-        if let bundleId = cachedFrontmostBundleId,
+        // Check per-app override
+        if let bundleId = bundleId,
            let overrides = appOverrides[bundleId],
            overrides.contains(id) {
             return false
@@ -230,14 +311,20 @@ final class GestureConfig: ObservableObject {
     // MARK: - Action Remapping
 
     /// Returns the action assigned to a gesture (default or remapped).
-    /// Reads from in-memory cache (no UserDefaults I/O or string allocation).
+    /// Thread-safe: reads from in-memory cache under enabledLock.
     func actionFor(_ gestureId: String) -> KeySynthesizer.Action {
-        actionCache[gestureId] ?? KeySynthesizer.defaultActions[gestureId] ?? .cmdW
+        os_unfair_lock_lock(&enabledLock)
+        let action = actionCache[gestureId]
+        os_unfair_lock_unlock(&enabledLock)
+        return action ?? KeySynthesizer.defaultActions[gestureId] ?? .cmdW
     }
 
     /// Sets a remapped action for a gesture.
+    /// Thread-safe: writes to actionCache under enabledLock.
     func setAction(_ gestureId: String, _ action: KeySynthesizer.Action) {
+        os_unfair_lock_lock(&enabledLock)
         actionCache[gestureId] = action
+        os_unfair_lock_unlock(&enabledLock)
         UserDefaults.standard.set(action.rawValue, forKey: "action.\(gestureId)")
         objectWillChange.send()
     }
@@ -315,14 +402,26 @@ final class GestureConfig: ObservableObject {
     // MARK: - HUD & Haptic
 
     /// Cached values for hot-path reads (avoids UserDefaults I/O under engine lock).
-    private(set) var cachedHudEnabled: Bool = false
-    private(set) var cachedHapticEnabled: Bool = true
+    /// Protected by enabledLock for thread-safe read from touch callback / write from main thread.
+    private var cachedHudEnabled: Bool = false
+    private var cachedHapticEnabled: Bool = true
+
+    /// Thread-safe snapshot of HUD/haptic settings (single lock acquisition).
+    var feedbackSnapshot: (hudEnabled: Bool, hapticEnabled: Bool) {
+        os_unfair_lock_lock(&enabledLock)
+        let h = cachedHudEnabled
+        let p = cachedHapticEnabled
+        os_unfair_lock_unlock(&enabledLock)
+        return (h, p)
+    }
 
     var hudEnabled: Bool {
         get { UserDefaults.standard.object(forKey: "hudEnabled") as? Bool ?? false }
         set {
             UserDefaults.standard.set(newValue, forKey: "hudEnabled")
+            os_unfair_lock_lock(&enabledLock)
             cachedHudEnabled = newValue
+            os_unfair_lock_unlock(&enabledLock)
             objectWillChange.send()
         }
     }
@@ -331,7 +430,146 @@ final class GestureConfig: ObservableObject {
         get { UserDefaults.standard.object(forKey: "hapticEnabled") as? Bool ?? true }
         set {
             UserDefaults.standard.set(newValue, forKey: "hapticEnabled")
+            os_unfair_lock_lock(&enabledLock)
             cachedHapticEnabled = newValue
+            os_unfair_lock_unlock(&enabledLock)
+            objectWillChange.send()
+        }
+    }
+
+    // MARK: - Zone-Based Actions
+
+    /// Gestures that support left/right zone-based action mapping.
+    static let zoneCapableGestures: Set<String> = [
+        "twoFingerDoubleTap", "threeFingerDoubleTap", "threeFingerClick", "fiveFingerTap"
+    ]
+
+    /// Whether zone-based actions are enabled for a gesture.
+    func zonesEnabled(for gestureId: String) -> Bool {
+        UserDefaults.standard.object(forKey: "zones.enabled.\(gestureId)") as? Bool ?? false
+    }
+
+    /// Sets whether zone-based actions are enabled for a gesture.
+    func setZonesEnabled(for gestureId: String, enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: "zones.enabled.\(gestureId)")
+        objectWillChange.send()
+    }
+
+    /// Returns the action for a gesture in a specific zone (or nil if not configured).
+    func zoneAction(for gestureId: String, zone: TrackpadZone) -> KeySynthesizer.Action? {
+        guard let raw = UserDefaults.standard.string(forKey: "zones.\(gestureId).\(zone.rawValue)"),
+              let action = KeySynthesizer.Action(rawValue: raw) else { return nil }
+        return action
+    }
+
+    /// Sets the action for a gesture in a specific zone.
+    func setZoneAction(for gestureId: String, zone: TrackpadZone, action: KeySynthesizer.Action) {
+        UserDefaults.standard.set(action.rawValue, forKey: "zones.\(gestureId).\(zone.rawValue)")
+        objectWillChange.send()
+    }
+
+    // MARK: - Shortcut Names
+
+    /// Returns the Apple Shortcuts name for a gesture.
+    func shortcutName(for gestureId: String) -> String? {
+        UserDefaults.standard.string(forKey: "shortcut.\(gestureId)")
+    }
+
+    /// Sets the Apple Shortcuts name for a gesture.
+    func setShortcutName(for gestureId: String, name: String) {
+        if name.isEmpty {
+            UserDefaults.standard.removeObject(forKey: "shortcut.\(gestureId)")
+        } else {
+            UserDefaults.standard.set(name, forKey: "shortcut.\(gestureId)")
+        }
+        objectWillChange.send()
+    }
+
+    // MARK: - Cooldown
+
+    /// Default cooldown durations by gesture type.
+    static let defaultCooldowns: [String: TimeInterval] = {
+        var map: [String: TimeInterval] = [:]
+        // Taps get shorter cooldown, swipes/long-press get longer
+        for info in all {
+            let id = info.id
+            if id.contains("Swipe") || id.contains("LongPress") || id.contains("Click") {
+                map[id] = 0.5
+            } else {
+                map[id] = 0.3
+            }
+        }
+        return map
+    }()
+
+    /// Cached cooldown enabled flag (UserDefaults `"cooldownEnabled"`).
+    /// Protected by enabledLock.
+    private var cachedCooldownEnabled: Bool = false
+
+    /// Per-gesture cooldown override cache. Protected by enabledLock.
+    private var perGestureCooldown: [String: TimeInterval] = [:]
+
+    /// Whether cooldown is globally enabled.
+    var cooldownEnabled: Bool {
+        get {
+            os_unfair_lock_lock(&enabledLock)
+            let v = cachedCooldownEnabled
+            os_unfair_lock_unlock(&enabledLock)
+            return v
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "cooldownEnabled")
+            os_unfair_lock_lock(&enabledLock)
+            cachedCooldownEnabled = newValue
+            os_unfair_lock_unlock(&enabledLock)
+            objectWillChange.send()
+        }
+    }
+
+    /// Returns the cooldown duration for a gesture (per-gesture override or default).
+    /// Clamped to 0.1–5.0 seconds to prevent degenerate values.
+    func cooldownDuration(for gestureId: String) -> TimeInterval {
+        os_unfair_lock_lock(&enabledLock)
+        if let override = perGestureCooldown[gestureId] {
+            os_unfair_lock_unlock(&enabledLock)
+            return Self.clamp(override, 0.1, 5.0)
+        }
+        os_unfair_lock_unlock(&enabledLock)
+        return Self.defaultCooldowns[gestureId] ?? 0.3
+    }
+
+    /// Sets a custom cooldown duration for a gesture.
+    func setCooldownDuration(for gestureId: String, duration: TimeInterval) {
+        os_unfair_lock_lock(&enabledLock)
+        perGestureCooldown[gestureId] = duration
+        os_unfair_lock_unlock(&enabledLock)
+        UserDefaults.standard.set(duration, forKey: "cooldown.\(gestureId)")
+    }
+
+    /// Clears a per-gesture cooldown override (falls back to default).
+    func clearCooldownDuration(for gestureId: String) {
+        os_unfair_lock_lock(&enabledLock)
+        perGestureCooldown.removeValue(forKey: gestureId)
+        os_unfair_lock_unlock(&enabledLock)
+        UserDefaults.standard.removeObject(forKey: "cooldown.\(gestureId)")
+    }
+
+    /// Loads per-gesture cooldown overrides from UserDefaults.
+    private func loadCooldownOverrides() {
+        for info in Self.all {
+            if let val = UserDefaults.standard.object(forKey: "cooldown.\(info.id)") as? Double {
+                perGestureCooldown[info.id] = val
+            }
+        }
+    }
+
+    // MARK: - Launch at Login
+
+    /// Whether the app is registered to launch at login (backed by SMAppService).
+    var launchAtLogin: Bool {
+        get { LaunchAtLoginHelper.isEnabled }
+        set {
+            LaunchAtLoginHelper.setEnabled(newValue)
             objectWillChange.send()
         }
     }
@@ -390,40 +628,45 @@ final class GestureConfig: ObservableObject {
         }
     }
 
-    // Effective threshold values (thread-safe reads from UserDefaults)
+    // MARK: - Per-Frame Snapshot
 
-    /// Effective tap duration (base 0.25s × cachedTapSpeed)
-    var effectiveMaxTapDuration: TimeInterval {
-        0.250 * cachedTapSpeed
+    /// The current frame's sensitivity snapshot (set by GestureEngine at frame start).
+    /// Reading this avoids individual lock acquisitions in each recognizer.
+    /// Only written under engineLock (touch callback), only read under engineLock (recognizers).
+    var frameSnapshot = SensitivitySnapshot(tapSpeed: 1.0, swipeMultiplier: 1.0, moveMultiplier: 1.0)
+
+    /// Updates frameSnapshot from cached values (call once per touch frame under engineLock).
+    func updateFrameSnapshot() {
+        os_unfair_lock_lock(&enabledLock)
+        frameSnapshot = SensitivitySnapshot(
+            tapSpeed: cachedTapSpeed,
+            swipeMultiplier: cachedSwipeMultiplier,
+            moveMultiplier: cachedMoveMultiplier
+        )
+        os_unfair_lock_unlock(&enabledLock)
     }
 
-    /// Effective double-tap window (base 0.40s × cachedTapSpeed)
-    var effectiveDoubleTapWindow: TimeInterval {
-        0.400 * cachedTapSpeed
-    }
+    // Effective threshold values — read from frameSnapshot (no individual locking needed).
+    // These are called from recognizers under engineLock after updateFrameSnapshot().
 
-    /// Effective multi-tap window (base 0.35s × cachedTapSpeed)
-    var effectiveMultiTapWindow: TimeInterval {
-        0.350 * cachedTapSpeed
-    }
+    /// Effective tap duration (base 0.25s × tapSpeed)
+    var effectiveMaxTapDuration: TimeInterval { frameSnapshot.maxTapDuration() }
 
-    /// Effective hold stability duration (base 0.10s × cachedTapSpeed)
-    var effectiveHoldStability: TimeInterval {
-        0.100 * cachedTapSpeed
-    }
+    /// Effective double-tap window (base 0.40s × tapSpeed)
+    var effectiveDoubleTapWindow: TimeInterval { frameSnapshot.doubleTapWindow() }
 
-    /// Effective long press duration (base × cachedTapSpeed)
-    func effectiveLongPressDuration(base: Double) -> TimeInterval {
-        base * cachedTapSpeed
-    }
+    /// Effective multi-tap window (base 0.35s × tapSpeed)
+    var effectiveMultiTapWindow: TimeInterval { frameSnapshot.multiTapWindow() }
 
-    /// Effective swipe threshold (base × cachedSwipeMultiplier)
-    func effectiveSwipeThreshold(base: Float) -> Float {
-        base * Float(cachedSwipeMultiplier)
-    }
+    /// Effective hold stability duration (base 0.10s × tapSpeed)
+    var effectiveHoldStability: TimeInterval { frameSnapshot.holdStability() }
 
-    /// Effective move threshold (base × cachedMoveMultiplier)
-    func effectiveMoveThreshold(base: Float) -> Float {
-        base * Float(cachedMoveMultiplier)
-    }
+    /// Effective long press duration (base × tapSpeed)
+    func effectiveLongPressDuration(base: Double) -> TimeInterval { frameSnapshot.longPressDuration(base: base) }
+
+    /// Effective swipe threshold (base × swipeMultiplier)
+    func effectiveSwipeThreshold(base: Float) -> Float { frameSnapshot.swipeThreshold(base: base) }
+
+    /// Effective move threshold (base × moveMultiplier)
+    func effectiveMoveThreshold(base: Float) -> Float { frameSnapshot.moveThreshold(base: base) }
 }

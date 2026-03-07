@@ -54,7 +54,7 @@ final class TwoFingerTapRecognizer {
             if activeCount > 2 { reset(); return false }
             if activeCount == 2 {
                 dropTime = 0
-                if hasExcessiveMovement(activeTouches) { reset() }
+                if hasExcessiveMovement(activeTouches, initialPositions: initialPositions, threshold: moveThreshold) { reset() }
                 return false
             }
             if activeCount == 0 {
@@ -81,13 +81,24 @@ final class TwoFingerTapRecognizer {
             if activeCount > 2 { reset(); return false }
             if activeCount == 2 {
                 dropTime = 0
-                if hasExcessiveMovement(activeTouches) { reset() }
+                if hasExcessiveMovement(activeTouches, initialPositions: initialPositions, threshold: moveThreshold) { reset() }
                 return false
             }
             if activeCount == 0 {
                 var didFire = false
                 if GestureConfig.shared.isEnabled("twoFingerDoubleTap") {
-                    KeySynthesizer.fireAction(gestureId: "twoFingerDoubleTap")
+                    let config = GestureConfig.shared
+                    if config.zonesEnabled(for: "twoFingerDoubleTap") {
+                        let avgX = initialPositions.reduce(Float(0)) { $0 + $1.x } / max(Float(initialPositions.count), 1)
+                        let zone = TrackpadZone.from(x: avgX)
+                        if let zoneAction = config.zoneAction(for: "twoFingerDoubleTap", zone: zone) {
+                            KeySynthesizer.fireAction(gestureId: "twoFingerDoubleTap", action: { zoneAction.execute() })
+                        } else {
+                            KeySynthesizer.fireAction(gestureId: "twoFingerDoubleTap")
+                        }
+                    } else {
+                        KeySynthesizer.fireAction(gestureId: "twoFingerDoubleTap")
+                    }
                     didFire = true
                 }
                 reset()
@@ -114,14 +125,4 @@ final class TwoFingerTapRecognizer {
         }
     }
 
-    private func hasExcessiveMovement(_ activeTouches: [MTTouch]) -> Bool {
-        for touch in activeTouches {
-            if let initial = initialPositions.first(where: { $0.pathIndex == touch.pathIndex }) {
-                let dx = touch.normalizedVector.position.x - initial.x
-                let dy = touch.normalizedVector.position.y - initial.y
-                if dx * dx + dy * dy > moveThreshold * moveThreshold { return true }
-            }
-        }
-        return false
-    }
 }

@@ -40,10 +40,12 @@ enum KeySynthesizer {
         case brightnessDown = "brightnessDown"
         case playPause = "playPause"
         case forceQuit = "forceQuit"
+        case hideApp = "hideApp"
         case terminateApp = "terminateApp"
         case sleepDisplay = "sleepDisplay"
         case kbBrightnessUp = "kbBrightnessUp"
         case kbBrightnessDown = "kbBrightnessDown"
+        case shortcut = "shortcut"
         case custom = "custom"
 
         var id: String { rawValue }
@@ -80,11 +82,13 @@ enum KeySynthesizer {
             case .brightnessUp: return "밝기 증가"
             case .brightnessDown: return "밝기 감소"
             case .playPause: return "재생/일시정지"
+            case .hideApp: return "앱 숨기기 (⌘H)"
             case .forceQuit: return "강제 종료 (⌥⌘Esc)"
             case .terminateApp: return "앱 종료"
             case .sleepDisplay: return "화면 끄기"
             case .kbBrightnessUp: return "키보드 백라이트 증가"
             case .kbBrightnessDown: return "키보드 백라이트 감소"
+            case .shortcut: return "Shortcuts 실행"
             case .custom: return "사용자 지정"
             }
         }
@@ -121,11 +125,13 @@ enum KeySynthesizer {
             case .brightnessUp: postBrightnessUp()
             case .brightnessDown: postBrightnessDown()
             case .playPause: postPlayPause()
+            case .hideApp: postHideApp()
             case .forceQuit: postForceQuit()
             case .terminateApp: terminateFrontmostApp()
             case .sleepDisplay: postSleepDisplay()
             case .kbBrightnessUp: postKbBrightnessUp()
             case .kbBrightnessDown: postKbBrightnessDown()
+            case .shortcut: break // handled separately with shortcut name
             case .custom: break // handled separately with keyCode/flags
             }
         }
@@ -143,6 +149,7 @@ enum KeySynthesizer {
         "swhDown": .minimize,
         "threeFingerDoubleTap": .paste,
         "threeFingerClick": .cmdW,
+        "threeFingerLongClick": .terminateApp,
         "fourFingerClick": .toggleFullscreen,
         "twoFingerSwipeRight": .back,
         "twoFingerSwipeLeft": .forward,
@@ -159,20 +166,76 @@ enum KeySynthesizer {
         "fourFingerDoubleTap": .screenshot,
         "fourFingerLongPress": .selectAll,
         "fiveFingerTap": .lockScreen,
-        "fiveFingerClick": .terminateApp,
+        "fourFingerLongClick": .hideApp,
+        "fiveFingerClick": .forceQuit,
         "threeFingerSwipeRight": .nextTab,
         "threeFingerSwipeLeft": .prevTab,
         "threeFingerSwipeUp": .pageTop,
         "threeFingerSwipeDown": .pageBottom,
         "fiveFingerLongPress": .sleepDisplay,
+        "threeFingerSwipeDiagUpRight": .spotlight,
+        "threeFingerSwipeDiagUpLeft": .find,
+        "threeFingerSwipeDiagDownRight": .pageBottom,
+        "threeFingerSwipeDiagDownLeft": .pageTop,
     ]
+
+    /// Execute an Apple Shortcut by name for a gesture.
+    static func executeShortcut(gestureId: String) {
+        guard let name = GestureConfig.shared.shortcutName(for: gestureId), !name.isEmpty else {
+            NSLog("GestureKeys: No shortcut configured for %@", gestureId)
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/shortcuts")
+            task.arguments = ["run", name]
+            do {
+                try task.run()
+                task.waitUntilExit()
+                if task.terminationStatus != 0 {
+                    NSLog("GestureKeys: Shortcut '%@' exited with status %d", name, task.terminationStatus)
+                }
+            } catch {
+                NSLog("GestureKeys: Failed to run shortcut '%@': %@", name, error.localizedDescription)
+            }
+        }
+    }
 
     /// Execute a custom key combo stored in UserDefaults.
     static func postCustomKey(forGesture gestureId: String) {
         let keyCode = CGKeyCode(UserDefaults.standard.integer(forKey: "customKey.\(gestureId).keyCode"))
         let rawFlags = UserDefaults.standard.integer(forKey: "customKey.\(gestureId).flags")
+        // Guard: keyCode=0 with no modifiers means "not configured" (0x00 is 'A' key)
+        guard keyCode != 0 || rawFlags != 0 else {
+            NSLog("GestureKeys: Custom key not configured for %@", gestureId)
+            return
+        }
         let flags = CGEventFlags(rawValue: UInt64(rawFlags))
         postKeyCombo(keyCode: keyCode, flags: flags)
+    }
+
+    // MARK: - Key Code Display
+
+    /// Shared keyCode → display string mapping (used by KeyCaptureView and CheatSheetView).
+    static let keyCodeNames: [UInt16: String] = [
+        0x00: "A", 0x01: "S", 0x02: "D", 0x03: "F", 0x04: "H", 0x05: "G",
+        0x06: "Z", 0x07: "X", 0x08: "C", 0x09: "V", 0x0B: "B", 0x0C: "Q",
+        0x0D: "W", 0x0E: "E", 0x0F: "R", 0x10: "Y", 0x11: "T", 0x12: "1",
+        0x13: "2", 0x14: "3", 0x15: "4", 0x16: "6", 0x17: "5", 0x18: "=",
+        0x19: "9", 0x1A: "7", 0x1B: "-", 0x1C: "8", 0x1D: "0", 0x1E: "]",
+        0x1F: "O", 0x20: "U", 0x21: "[", 0x22: "I", 0x23: "P", 0x24: "Return",
+        0x25: "L", 0x26: "J", 0x27: "'", 0x28: "K", 0x29: ";", 0x2A: "\\",
+        0x2B: ",", 0x2C: "/", 0x2D: "N", 0x2E: "M", 0x2F: ".",
+        0x30: "Tab", 0x31: "Space", 0x33: "Delete", 0x35: "Esc",
+        0x7A: "F1", 0x78: "F2", 0x63: "F3", 0x76: "F4",
+        0x60: "F5", 0x61: "F6", 0x62: "F7", 0x64: "F8",
+        0x65: "F9", 0x6D: "F10", 0x67: "F11", 0x6F: "F12",
+        0x7B: "←", 0x7C: "→", 0x7D: "↓", 0x7E: "↑",
+    ]
+
+    /// Returns a display name for a virtual key code.
+    static func keyCodeToString(_ keyCode: UInt16) -> String {
+        keyCodeNames[keyCode] ?? "Key\(keyCode)"
     }
 
     // MARK: - Virtual Keycodes
@@ -204,7 +267,13 @@ enum KeySynthesizer {
 
     /// Buffer for actions to execute after engineLock release.
     /// Only accessed while engineLock is held — no separate synchronization needed.
-    static var pendingActions: [() -> Void] = []
+    private static var pendingActions: [() -> Void] = []
+
+    /// Appends a deferred action to the pending buffer.
+    /// Must be called while engineLock is held.
+    static func appendPendingAction(_ action: @escaping () -> Void) {
+        pendingActions.append(action)
+    }
 
     /// Atomically takes all pending actions (returns the array and clears the buffer).
     /// Must be called while engineLock is held; execute the returned closures after unlock.
@@ -212,6 +281,28 @@ enum KeySynthesizer {
         let actions = pendingActions
         pendingActions = []  // COW: `actions` keeps the old buffer
         return actions
+    }
+
+    // MARK: - Cooldown
+
+    /// Last fire timestamp per gesture ID. Only accessed while engineLock is held.
+    private static var lastFireTime: [String: TimeInterval] = [:]
+
+    /// Returns true if the gesture is still in its cooldown period.
+    /// Must be called while engineLock is held.
+    static func isInCooldown(gestureId: String) -> Bool {
+        guard GestureConfig.shared.cooldownEnabled else { return false }
+        guard let last = lastFireTime[gestureId] else { return false }
+        let now = ProcessInfo.processInfo.systemUptime
+        let duration = GestureConfig.shared.cooldownDuration(for: gestureId)
+        return (now - last) < duration
+    }
+
+    /// Records the fire time for cooldown tracking.
+    /// Must be called while engineLock is held.
+    static func recordFireTime(gestureId: String) {
+        guard GestureConfig.shared.cooldownEnabled else { return }
+        lastFireTime[gestureId] = ProcessInfo.processInfo.systemUptime
     }
 
     // MARK: - Central Dispatch
@@ -224,24 +315,30 @@ enum KeySynthesizer {
             return
         }
 
+        // Cooldown check (under engineLock)
+        if isInCooldown(gestureId: gestureId) { return }
+        recordFireTime(gestureId: gestureId)
+
         // Capture config values while under lock (all in-memory, fast)
         let config = GestureConfig.shared
-        let hudEnabled = config.cachedHudEnabled
-        let hapticEnabled = config.cachedHapticEnabled
+        let feedback = config.feedbackSnapshot
         let action = config.actionFor(gestureId)
         let gestureInfo = GestureConfig.info(for: gestureId)
 
         // Defer heavy work (CGEvent posting, HUD, haptic) to after lock release
         pendingActions.append {
-            if hudEnabled, let info = gestureInfo {
+            GestureStats.shared.record(gestureId: gestureId)
+            if feedback.hudEnabled, let info = gestureInfo {
                 GestureHUD.shared.show(name: info.name, action: info.action)
             }
-            if hapticEnabled {
+            if feedback.hapticEnabled {
                 DispatchQueue.main.async {
                     NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
                 }
             }
-            if action == .custom {
+            if action == .shortcut {
+                executeShortcut(gestureId: gestureId)
+            } else if action == .custom {
                 postCustomKey(forGesture: gestureId)
             } else {
                 action.execute()
@@ -256,16 +353,20 @@ enum KeySynthesizer {
             return
         }
 
+        // Cooldown check (under engineLock)
+        if isInCooldown(gestureId: gestureId) { return }
+        recordFireTime(gestureId: gestureId)
+
         let config = GestureConfig.shared
-        let hudEnabled = config.cachedHudEnabled
-        let hapticEnabled = config.cachedHapticEnabled
+        let feedback = config.feedbackSnapshot
         let gestureInfo = GestureConfig.info(for: gestureId)
 
         pendingActions.append {
-            if hudEnabled, let info = gestureInfo {
+            GestureStats.shared.record(gestureId: gestureId)
+            if feedback.hudEnabled, let info = gestureInfo {
                 GestureHUD.shared.show(name: info.name, action: info.action)
             }
-            if hapticEnabled {
+            if feedback.hapticEnabled {
                 DispatchQueue.main.async {
                     NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
                 }
@@ -324,8 +425,12 @@ enum KeySynthesizer {
             let task = Process()
             task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
             task.arguments = ["-e", "tell application \"System Events\" to key code 53 using {command down, option down}"]
-            try? task.run()
-            task.waitUntilExit()
+            do {
+                try task.run()
+                task.waitUntilExit()
+            } catch {
+                NSLog("GestureKeys: Failed to run force quit: %@", error.localizedDescription)
+            }
         }
     }
 
@@ -334,11 +439,18 @@ enum KeySynthesizer {
             let task = Process()
             task.executableURL = URL(fileURLWithPath: "/usr/bin/pmset")
             task.arguments = ["displaysleepnow"]
-            try? task.run()
-            task.waitUntilExit()
+            do {
+                try task.run()
+                task.waitUntilExit()
+            } catch {
+                NSLog("GestureKeys: Failed to run pmset: %@", error.localizedDescription)
+            }
         }
     }
 
+    private static let kVK_ANSI_H: CGKeyCode = 0x04
+
+    static func postHideApp()            { postKeyCombo(keyCode: kVK_ANSI_H, flags: .maskCommand) }
     static func postSave()              { postKeyCombo(keyCode: kVK_ANSI_S, flags: .maskCommand) }
     static func postPageTop()           { postKeyCombo(keyCode: kVK_UpArrow, flags: .maskCommand) }
     static func postPageBottom()        { postKeyCombo(keyCode: kVK_DownArrow, flags: .maskCommand) }
@@ -404,15 +516,21 @@ enum KeySynthesizer {
         func post(down: Bool) {
             let flags = down ? 0xa00 : 0xb00
             let data1 = (keyType << 16) | flags
-            if let event = NSEvent.otherEvent(
+            guard let event = NSEvent.otherEvent(
                 with: .systemDefined,
                 location: .zero,
                 modifierFlags: NSEvent.ModifierFlags(rawValue: UInt(flags)),
                 timestamp: 0, windowNumber: 0, context: nil,
                 subtype: 8, data1: data1, data2: -1
-            ) {
-                event.cgEvent?.post(tap: .cghidEventTap)
+            ) else {
+                NSLog("GestureKeys: Failed to create system key event (keyType=%d, down=%@)", keyType, down ? "true" : "false")
+                return
             }
+            guard let cgEvent = event.cgEvent else {
+                NSLog("GestureKeys: System key event has nil cgEvent (keyType=%d)", keyType)
+                return
+            }
+            cgEvent.post(tap: .cghidEventTap)
         }
         lastSynthesisTimestamp = ProcessInfo.processInfo.systemUptime
         post(down: true)
