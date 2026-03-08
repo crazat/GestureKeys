@@ -84,6 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         accessibilityTimer?.invalidate()
         NotificationCenter.default.removeObserver(self)
         engine.stop()
+        GestureStats.shared.flushIfNeeded()
     }
 
     // MARK: - Accessibility

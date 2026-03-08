@@ -703,20 +703,28 @@ final class GestureEngine {
 
     /// Five-finger gestures (tap, long-press) + deferred display sleep.
     private func processFiveFingerGestures(_ activeTouches: [MTTouch], activeCount: Int, timestamp: Double) {
+        // Suppress 5FLP/5FT while 5FC is waiting for Force Touch
+        let fiveClickHeld = fiveFingerClickRecognizer.state == .clickHeld
+
         if activeCount >= 5 || fiveFingerTapRecognizer.state != .idle || fiveFingerLongPressRecognizer.state != .idle {
-            let tapFired = fiveFingerTapRecognizer.processTouches(activeTouches, timestamp: timestamp)
-            fiveFingerLongPressRecognizer.processTouches(activeTouches, timestamp: timestamp)
-            if tapFired {
-                fiveFingerClickRecognizer.reset()
-                fiveFingerLongPressRecognizer.reset()
-                fourFingerLongPressRecognizer.reset()
-                fourFingerDoubleTapRecognizer.reset()
-            }
-            if fiveFingerLongPressRecognizer.state == .fired {
+            if fiveClickHeld {
                 fiveFingerTapRecognizer.reset()
-                fiveFingerClickRecognizer.reset()
-                fourFingerLongPressRecognizer.reset()
-                fourFingerDoubleTapRecognizer.reset()
+                fiveFingerLongPressRecognizer.reset()
+            } else {
+                let tapFired = fiveFingerTapRecognizer.processTouches(activeTouches, timestamp: timestamp)
+                fiveFingerLongPressRecognizer.processTouches(activeTouches, timestamp: timestamp)
+                if tapFired {
+                    fiveFingerClickRecognizer.reset()
+                    fiveFingerLongPressRecognizer.reset()
+                    fourFingerLongPressRecognizer.reset()
+                    fourFingerDoubleTapRecognizer.reset()
+                }
+                if fiveFingerLongPressRecognizer.state == .fired {
+                    fiveFingerTapRecognizer.reset()
+                    fiveFingerClickRecognizer.reset()
+                    fourFingerLongPressRecognizer.reset()
+                    fourFingerDoubleTapRecognizer.reset()
+                }
             }
         }
 
@@ -781,7 +789,12 @@ final class GestureEngine {
             guard let rawPtr = CFArrayGetValueAtIndex(rawList, i) else { continue }
             let device = MTDeviceRef(rawPtr)
             MTRegisterContactFrameCallback(device, touchCallback)
-            MTDeviceStart(device, 0)
+            let result = MTDeviceStart(device, 0)
+            if result != 0 {
+                NSLog("GestureKeys: MTDeviceStart failed for device %d: error %d", i, result)
+                MTUnregisterContactFrameCallback(device, touchCallback)
+                continue
+            }
             devices.append(device)
         }
     }

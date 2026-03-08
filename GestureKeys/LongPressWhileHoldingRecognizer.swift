@@ -2,8 +2,8 @@ import Foundation
 
 /// Recognizes two-finger hold + third-finger long press.
 ///
-/// - Left side → Redo (⇧⌘Z)
-/// - Right side → Save (⌘S)
+/// - Left side → Save (⌘S)
+/// - Right side → Undo (⌘Z)
 ///
 /// Distinguished from TWH (double-tap) by hold duration:
 /// - Tap < 300ms → TWH handles it
@@ -12,9 +12,9 @@ import Foundation
 /// State machine:
 /// ```
 /// [Idle] → 2+ active stable 100ms → [HoldDetected]
-/// [HoldDetected] → 3+ active, new finger LEFT, holdConfirmed → [Pressing]
-/// [Pressing] → held 300ms+ → fire Redo → [Fired]
-/// [Pressing] → finger lifts before 300ms → [HoldDetected]
+/// [HoldDetected] → 3+ active, new finger LEFT/RIGHT, holdConfirmed → [Pressing]
+/// [Pressing] → held 400ms+ → fire → [Fired]
+/// [Pressing] → finger lifts before threshold → [HoldDetected]
 /// [Fired] → finger lifts → [HoldDetected]
 /// ```
 final class LongPressWhileHoldingRecognizer {
@@ -30,6 +30,8 @@ final class LongPressWhileHoldingRecognizer {
 
     private var longPressDuration: TimeInterval { GestureConfig.shared.effectiveLongPressDuration(base: 0.400) }
     private let firedTimeout: TimeInterval = 5.0
+
+    // MARK: - Tracking State
 
     /// Shared hold detection logic
     private var hold = TwoFingerHoldDetector()
@@ -93,7 +95,9 @@ final class LongPressWhileHoldingRecognizer {
                 return false
             }
 
-            if activeCount >= 3 && timestamp - pressStartTime >= longPressDuration {
+            let elapsed = timestamp - pressStartTime
+
+            if activeCount >= 3 && elapsed >= longPressDuration {
                 let gestureId = pressIsLeft ? "twhLeftLongPress" : "twhRightLongPress"
                 if GestureConfig.shared.isEnabled(gestureId) {
                     KeySynthesizer.fireAction(gestureId: gestureId)

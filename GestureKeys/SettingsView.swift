@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 // MARK: - SwiftUI Settings View
 
@@ -9,7 +10,7 @@ struct SettingsView: View {
     @State private var launchAtLogin = LaunchAtLoginHelper.isEnabled
     @State private var showingAppOverrides = false
     @State private var searchText = ""
-    @State private var expandedCategories: Set<String> = []
+    @State private var expandedCategories: Set<String> = Set(GestureConfig.categories.map(\.id))
 
     private let permissionTimer = Timer.publish(every: 3, on: .main, in: .common).autoconnect()
 
@@ -233,19 +234,22 @@ struct SettingsView: View {
                 sensitivitySlider(
                     label: "탭 속도",
                     value: Binding(get: { config.tapSpeedMultiplier }, set: { config.tapSpeedMultiplier = $0 }),
-                    description: "탭/더블탭 인식 시간 허용치"
+                    description: "탭/더블탭 인식 시간 허용치",
+                    leftLabel: "빠르게", rightLabel: "느리게"
                 )
                 Divider().padding(.leading, 12)
                 sensitivitySlider(
                     label: "스와이프 거리",
                     value: Binding(get: { config.swipeThresholdMultiplier }, set: { config.swipeThresholdMultiplier = $0 }),
-                    description: "스와이프 인식에 필요한 이동 거리"
+                    description: "스와이프 인식에 필요한 이동 거리",
+                    leftLabel: "짧게", rightLabel: "길게"
                 )
                 Divider().padding(.leading, 12)
                 sensitivitySlider(
                     label: "이동 허용치",
                     value: Binding(get: { config.moveThresholdMultiplier }, set: { config.moveThresholdMultiplier = $0 }),
-                    description: "탭 시 허용되는 손가락 움직임"
+                    description: "탭 시 허용되는 손가락 움직임",
+                    leftLabel: "엄격", rightLabel: "관대"
                 )
             }
             .background(Color(nsColor: .controlBackgroundColor))
@@ -257,7 +261,7 @@ struct SettingsView: View {
         }
     }
 
-    private func sensitivitySlider(label: String, value: Binding<Double>, description: String) -> some View {
+    private func sensitivitySlider(label: String, value: Binding<Double>, description: String, leftLabel: String, rightLabel: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(label)
@@ -274,8 +278,18 @@ struct SettingsView: View {
                     .foregroundColor(.secondary)
                     .monospacedDigit()
             }
-            Slider(value: value, in: 0.5...2.0, step: 0.1)
-                .controlSize(.small)
+            HStack(spacing: 4) {
+                Text(leftLabel)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .frame(width: 32, alignment: .trailing)
+                Slider(value: value, in: 0.5...2.0, step: 0.1)
+                    .controlSize(.small)
+                Text(rightLabel)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .frame(width: 32, alignment: .leading)
+            }
             Text(description)
                 .font(.caption2)
                 .foregroundColor(.secondary.opacity(0.7))
@@ -312,6 +326,18 @@ struct SettingsView: View {
                     .font(.title3)
                     .fontWeight(.semibold)
                 Spacer()
+                Button(action: exportSettings) {
+                    Image(systemName: "square.and.arrow.up")
+                }
+                .buttonStyle(.borderless)
+                .help("설정 내보내기")
+
+                Button(action: importSettings) {
+                    Image(systemName: "square.and.arrow.down")
+                }
+                .buttonStyle(.borderless)
+                .help("설정 가져오기")
+
                 Menu("프리셋") {
                     Button("기본") { applyPreset(.default) }
                     Button("최소") { applyPreset(.minimal) }
@@ -375,6 +401,19 @@ struct SettingsView: View {
                     Text("\(category.gestures.filter { config.uiIsEnabled($0.id) }.count)/\(category.gestures.count)")
                         .font(.caption)
                         .foregroundColor(Color(nsColor: .tertiaryLabelColor))
+
+                    if isExpanded {
+                        let allEnabled = category.gestures.allSatisfy { config.uiIsEnabled($0.id) }
+                        Button(allEnabled ? "모두 끄기" : "모두 켜기") {
+                            let newValue = !allEnabled
+                            for g in category.gestures {
+                                config.setEnabled(g.id, newValue)
+                            }
+                        }
+                        .controlSize(.mini)
+                        .buttonStyle(.borderless)
+                        .foregroundColor(.accentColor)
+                    }
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
@@ -405,7 +444,57 @@ struct SettingsView: View {
     private func gestureRow(_ gesture: GestureConfig.Info) -> some View {
         GestureRowView(gesture: gesture, config: config)
     }
+
+    // MARK: - Export / Import
+
+    private func exportSettings() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "GestureKeys-Settings.json"
+        panel.allowedContentTypes = [.json]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        var dict: [String: Any] = [:]
+        let defaults = UserDefaults.standard
+        for info in GestureConfig.all {
+            dict["gesture.\(info.id)"] = defaults.object(forKey: "gesture.\(info.id)")
+            dict["action.\(info.id)"] = defaults.object(forKey: "action.\(info.id)")
+            dict["cooldown.\(info.id)"] = defaults.object(forKey: "cooldown.\(info.id)")
+            dict["shortcut.\(info.id)"] = defaults.object(forKey: "shortcut.\(info.id)")
+            dict["zones.enabled.\(info.id)"] = defaults.object(forKey: "zones.enabled.\(info.id)")
+            dict["zones.\(info.id).left"] = defaults.object(forKey: "zones.\(info.id).left")
+            dict["zones.\(info.id).right"] = defaults.object(forKey: "zones.\(info.id).right")
+        }
+        for key in ["hudEnabled", "hapticEnabled", "cooldownEnabled",
+                     "tapSpeedMultiplier", "swipeThresholdMultiplier", "moveThresholdMultiplier",
+                     "typingSuppressionEnabled", "typingSuppressionWindow"] {
+            dict[key] = defaults.object(forKey: key)
+        }
+        // Filter nil values
+        let filtered = dict.compactMapValues { $0 }
+        guard let data = try? JSONSerialization.data(withJSONObject: filtered, options: [.prettyPrinted, .sortedKeys]) else { return }
+        try? data.write(to: url)
+    }
+
+    private func importSettings() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard let data = try? Data(contentsOf: url),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+
+        let defaults = UserDefaults.standard
+        for (key, value) in dict {
+            defaults.set(value, forKey: key)
+        }
+        config.reloadFromDefaults()
+    }
 }
+
+private let threeFingerSwipeIds: Set<String> = [
+    "threeFingerSwipeRight", "threeFingerSwipeLeft",
+    "threeFingerSwipeUp", "threeFingerSwipeDown",
+]
 
 private struct GestureRowView: View {
     let gesture: GestureConfig.Info
@@ -454,6 +543,50 @@ private struct GestureRowView: View {
                 .labelsHidden()
                 .controlSize(.small)
                 .frame(maxWidth: .infinity, alignment: .leading)
+
+                if let defaultAction = KeySynthesizer.defaultActions[gesture.id],
+                   config.actionFor(gesture.id) != defaultAction {
+                    Button("초기화") {
+                        config.setAction(gesture.id, defaultAction)
+                    }
+                    .controlSize(.mini)
+                    .buttonStyle(.borderless)
+                    .foregroundColor(.accentColor)
+                }
+            }
+
+            if threeFingerSwipeIds.contains(gesture.id) && config.uiIsEnabled(gesture.id) {
+                HStack(spacing: 6) {
+                    Spacer().frame(width: 32)
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.caption2)
+                        .foregroundColor(.orange)
+                    Text("시스템 설정 → 트랙패드 → 기타 제스처에서 세 손가락 스와이프를 꺼야 충돌이 방지됩니다.")
+                        .font(.caption2)
+                        .foregroundColor(.orange)
+                }
+            }
+
+            if config.cooldownEnabled {
+                HStack(spacing: 8) {
+                    Spacer().frame(width: 32)
+                    Text("쿨다운")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text(String(format: "%.1f초", config.cooldownDuration(for: gesture.id)))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .monospacedDigit()
+                        .frame(width: 32)
+                    Slider(
+                        value: Binding(
+                            get: { config.cooldownDuration(for: gesture.id) },
+                            set: { config.setCooldownDuration(for: gesture.id, duration: $0) }
+                        ),
+                        in: 0.1...2.0, step: 0.1
+                    )
+                    .controlSize(.mini)
+                }
             }
 
             if GestureConfig.zoneCapableGestures.contains(gesture.id) {
@@ -682,6 +815,7 @@ final class SettingsWindowController {
         let window = NSWindow(contentViewController: hostingController)
         window.title = "GestureKeys 설정"
         window.styleMask = [.titled, .closable, .resizable]
+        window.setFrameAutosaveName("SettingsWindow")
         window.center()
         window.isReleasedWhenClosed = false
         window.makeKeyAndOrderFront(nil)

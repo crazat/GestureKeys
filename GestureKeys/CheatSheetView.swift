@@ -72,8 +72,13 @@ struct CheatSheetView: View {
         }
     }
 
-    /// Returns display text for the cheat sheet: custom key binding if set, otherwise default action.
+    /// Returns display text for the cheat sheet: zone actions if enabled, custom key, or default action.
     private func actionText(for gesture: GestureConfig.Info) -> String {
+        if GestureConfig.zoneCapableGestures.contains(gesture.id) && config.zonesEnabled(for: gesture.id) {
+            let leftAction = config.zoneAction(for: gesture.id, zone: .left) ?? config.actionFor(gesture.id)
+            let rightAction = config.zoneAction(for: gesture.id, zone: .right) ?? config.actionFor(gesture.id)
+            return "◀ \(leftAction.displayName) / \(rightAction.displayName) ▶"
+        }
         let action = config.actionFor(gesture.id)
         if action == .custom {
             return formatCustomKey(gestureId: gesture.id)
@@ -119,6 +124,7 @@ final class CheatSheetWindowController {
         window.title = "바로가기"
         window.styleMask = [.titled, .closable]
         window.level = .floating
+        window.setFrameAutosaveName("CheatSheetWindow")
         window.center()
         window.isReleasedWhenClosed = false
         window.makeKeyAndOrderFront(nil)

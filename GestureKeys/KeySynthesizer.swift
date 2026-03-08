@@ -157,12 +157,12 @@ enum KeySynthesizer {
         "twoFingerDoubleTap": .cut,
         "threeFingerLongPress": .copy,
         "threeFingerTripleTap": .undo,
-        "twhLeftLongPress": .redo,
+        "twhLeftLongPress": .save,
         "ofhLeftSwipeUp": .volumeUp,
         "ofhLeftSwipeDown": .volumeDown,
         "ofhRightSwipeUp": .brightnessUp,
         "ofhRightSwipeDown": .brightnessDown,
-        "twhRightLongPress": .save,
+        "twhRightLongPress": .undo,
         "fourFingerDoubleTap": .screenshot,
         "fourFingerLongPress": .selectAll,
         "fiveFingerTap": .lockScreen,
@@ -278,8 +278,9 @@ enum KeySynthesizer {
     /// Atomically takes all pending actions (returns the array and clears the buffer).
     /// Must be called while engineLock is held; execute the returned closures after unlock.
     static func takePendingActions() -> [() -> Void] {
-        let actions = pendingActions
-        pendingActions = []  // COW: `actions` keeps the old buffer
+        guard !pendingActions.isEmpty else { return [] }
+        var actions: [() -> Void] = []
+        swap(&actions, &pendingActions)  // pendingActions keeps existing capacity
         return actions
     }
 

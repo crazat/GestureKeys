@@ -28,6 +28,7 @@ final class GestureStats {
 
     private var records: [DailyRecord] = []
     private var lock = os_unfair_lock()
+    private var isDirty = false
 
     private lazy var dateFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -43,9 +44,9 @@ final class GestureStats {
     // MARK: - Recording
 
     /// Record a gesture fire event. Thread-safe.
+    /// Persistence is batched — writes are flushed after a 5-second debounce or on app termination.
     func record(gestureId: String) {
         os_unfair_lock_lock(&lock)
-        defer { os_unfair_lock_unlock(&lock) }
 
         let today = dateFormatter.string(from: Date())
 
@@ -56,7 +57,25 @@ final class GestureStats {
             pruneOldRecords()
         }
 
-        persistRecords()
+        let needsSchedule = !isDirty
+        isDirty = true
+        os_unfair_lock_unlock(&lock)
+
+        if needsSchedule {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
+                self?.flushIfNeeded()
+            }
+        }
+    }
+
+    /// Flushes pending changes to UserDefaults. Call on app termination.
+    func flushIfNeeded() {
+        os_unfair_lock_lock(&lock)
+        guard isDirty else { os_unfair_lock_unlock(&lock); return }
+        isDirty = false
+        let data = try? JSONEncoder().encode(records)
+        os_unfair_lock_unlock(&lock)
+        if let data { defaults.set(data, forKey: storageKey) }
     }
 
     // MARK: - Queries
@@ -105,8 +124,9 @@ final class GestureStats {
     /// Clear all statistics.
     func clearAll() {
         os_unfair_lock_lock(&lock)
-        defer { os_unfair_lock_unlock(&lock) }
         records.removeAll()
+        isDirty = false
+        os_unfair_lock_unlock(&lock)
         defaults.removeObject(forKey: storageKey)
     }
 
@@ -162,11 +182,6 @@ final class GestureStats {
         } catch {
             NSLog("GestureKeys: Failed to decode stats data: %@", error.localizedDescription)
         }
-    }
-
-    private func persistRecords() {
-        guard let data = try? JSONEncoder().encode(records) else { return }
-        defaults.set(data, forKey: storageKey)
     }
 
     private func pruneOldRecords() {

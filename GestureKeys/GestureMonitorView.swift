@@ -259,9 +259,9 @@ final class GestureMonitor: ObservableObject {
 
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            for inc in increments {
-                self.heatmapGrid[inc.row][inc.col] += 1
-            }
+            var grid = self.heatmapGrid
+            for inc in increments { grid[inc.row][inc.col] += 1 }
+            self.heatmapGrid = grid
         }
     }
 
@@ -284,8 +284,8 @@ final class GestureMonitor: ObservableObject {
         lastTouchLogTime = now
         os_unfair_lock_unlock(&monitorLock)
 
-        let sizes = active.map { String(format: "%.1f/%.1f%@%@",
-            $0.majorAxis, $0.minorAxis,
+        let sizes = active.map { String(format: "%.1f/%.1f p%.2f%@%@",
+            $0.majorAxis, $0.minorAxis, $0.pressure,
             $0.isPalmSized ? " PALM" : "",
             $0.isEdgeTouch ? " EDGE" : "")
         }
@@ -333,6 +333,7 @@ final class GestureMonitorWindowController {
         window.title = "제스처 테스트"
         window.styleMask = [.titled, .closable]
         window.level = .floating
+        window.setFrameAutosaveName("GestureMonitorWindow")
         window.center()
         window.isReleasedWhenClosed = false
         window.makeKeyAndOrderFront(nil)

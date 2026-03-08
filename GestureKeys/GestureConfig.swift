@@ -49,12 +49,12 @@ final class GestureConfig: ObservableObject {
         Category(id: "windows", title: "창 관리", icon: "macwindow", gestures: [
             Info(id: "threeFingerClick",      name: "세 손가락 클릭",             action: "탭 닫기 (⌘W)",               defaultEnabled: true,
                  howTo: "세 손가락을 트랙패드에 올린 뒤, 물리적으로 트랙패드를 꾹 눌러 클릭하세요."),
-            Info(id: "threeFingerLongClick",  name: "세 손가락 길게 클릭",         action: "앱 종료 (⌘Q)",               defaultEnabled: false,
-                 howTo: "세 손가락을 트랙패드에 올린 뒤 클릭하고 0.5초간 유지하세요. 바로 떼면 탭 닫기입니다."),
+            Info(id: "threeFingerLongClick",  name: "세 손가락 세게 클릭",         action: "앱 종료 (⌘Q)",               defaultEnabled: false,
+                 howTo: "세 손가락을 트랙패드에 올린 뒤 세게 눌러 클릭하세요 (Force Touch). Force Touch 미지원 시 0.5초 유지로 동작합니다."),
             Info(id: "fourFingerClick",       name: "네 손가락 클릭",             action: "전체화면 토글 (⌃⌘F)",        defaultEnabled: true,
                  howTo: "네 손가락을 트랙패드에 올린 뒤, 물리적으로 트랙패드를 꾹 눌러 클릭하세요."),
-            Info(id: "fourFingerLongClick",  name: "네 손가락 길게 클릭",         action: "앱 숨기기 (⌘H)",            defaultEnabled: false,
-                 howTo: "네 손가락을 트랙패드에 올린 뒤 클릭하고 0.5초간 유지하세요. 바로 떼면 전체화면 토글입니다."),
+            Info(id: "fourFingerLongClick",  name: "네 손가락 세게 클릭",         action: "앱 숨기기 (⌘H)",            defaultEnabled: false,
+                 howTo: "네 손가락을 트랙패드에 올린 뒤 세게 눌러 클릭하세요 (Force Touch). 바로 떼면 전체화면 토글입니다."),
             Info(id: "swhUp",               name: "홀드 + 스와이프 ↑",          action: "새 창 (⌘N)",                defaultEnabled: true,
                  howTo: "두 손가락을 트랙패드에 올려 유지한 뒤, 왼쪽의 세 번째 손가락으로 위로 밀어주세요."),
             Info(id: "swhDown",             name: "홀드 + 스와이프 ↓",          action: "최소화 (⌘M)",               defaultEnabled: true,
@@ -89,10 +89,10 @@ final class GestureConfig: ObservableObject {
                  howTo: "세 손가락을 트랙패드에 올리고 0.5초 이상 움직이지 않고 유지하세요."),
             Info(id: "threeFingerTripleTap", name: "세 손가락 트리플탭",         action: "실행 취소 (⌘Z)",             defaultEnabled: false,
                  howTo: "세 손가락을 동시에 빠르게 세 번 탭하세요."),
-            Info(id: "twhLeftLongPress",     name: "홀드 + 왼쪽 길게 누르기",     action: "다시 실행 (⇧⌘Z)",            defaultEnabled: false,
-                 howTo: "두 손가락을 트랙패드에 올려 유지한 뒤, 왼쪽에서 세 번째 손가락을 0.3초 이상 누르고 있으세요."),
-            Info(id: "twhRightLongPress",    name: "홀드 + 오른쪽 길게 누르기",   action: "저장 (⌘S)",                  defaultEnabled: false,
-                 howTo: "두 손가락을 트랙패드에 올려 유지한 뒤, 오른쪽에서 세 번째 손가락을 0.3초 이상 누르고 있으세요."),
+            Info(id: "twhLeftLongPress",     name: "홀드 + 왼쪽 길게",            action: "저장 (⌘S)",                  defaultEnabled: false,
+                 howTo: "두 손가락을 트랙패드에 올려 유지한 뒤, 왼쪽에서 세 번째 손가락을 0.4초 이상 유지하세요."),
+            Info(id: "twhRightLongPress",    name: "홀드 + 오른쪽 길게",          action: "실행취소 (⌘Z)",              defaultEnabled: false,
+                 howTo: "두 손가락을 트랙패드에 올려 유지한 뒤, 오른쪽에서 세 번째 손가락을 0.4초 이상 유지하세요."),
         ]),
         Category(id: "system", title: "시스템", icon: "gearshape", gestures: [
             Info(id: "ofhLeftSwipeUp",       name: "한 손가락 홀드 + 왼쪽 ↑",     action: "볼륨 증가",                  defaultEnabled: false,
@@ -111,8 +111,8 @@ final class GestureConfig: ObservableObject {
                  howTo: "네 손가락을 트랙패드에 올리고 0.5초 이상 움직이지 않고 유지하세요."),
             Info(id: "fiveFingerTap",        name: "다섯 손가락 탭",             action: "잠금화면 (⌃⌘Q)",             defaultEnabled: false,
                  howTo: "다섯 손가락을 동시에 트랙패드에 올렸다가 빠르게 떼세요. 0.4초 이내에 완료해야 합니다."),
-            Info(id: "fiveFingerClick",      name: "다섯 손가락 클릭",           action: "강제 종료 (⌥⌘Esc)",          defaultEnabled: false,
-                 howTo: "다섯 손가락을 트랙패드에 올린 뒤, 물리적으로 트랙패드를 꾹 눌러 클릭하세요."),
+            Info(id: "fiveFingerClick",      name: "다섯 손가락 세게 클릭",       action: "강제 종료 (⌥⌘Esc)",          defaultEnabled: false,
+                 howTo: "다섯 손가락을 트랙패드에 올린 뒤 세게 눌러 클릭하세요 (Force Touch 필수). 일반 클릭으로는 발동되지 않습니다."),
             Info(id: "fiveFingerLongPress", name: "다섯 손가락 길게 누르기",     action: "화면 끄기",                   defaultEnabled: false,
                  howTo: "다섯 손가락을 트랙패드에 올리고 0.5초 이상 움직이지 않고 유지하세요."),
         ]),
@@ -277,18 +277,15 @@ final class GestureConfig: ObservableObject {
     // MARK: - API
 
     /// Thread-safe read from in-memory cache (no UserDefaults I/O).
-    /// Also checks per-app overrides for the frontmost application.
+    /// Also checks per-app overrides via frameAppOverrides (snapshotted per frame).
     func isEnabled(_ id: String) -> Bool {
         os_unfair_lock_lock(&enabledLock)
         let globalEnabled = enabledCache[id] ?? (Self.defaultEnabledMap[id] ?? false)
-        let bundleId = _cachedFrontmostBundleId
         os_unfair_lock_unlock(&enabledLock)
         guard globalEnabled else { return false }
 
-        // Check per-app override
-        if let bundleId = bundleId,
-           let overrides = appOverrides[bundleId],
-           overrides.contains(id) {
+        // Check per-app override from frame snapshot (no extra lock acquisition)
+        if let overrides = frameAppOverrides, overrides.contains(id) {
             return false
         }
         return true
@@ -306,6 +303,49 @@ final class GestureConfig: ObservableObject {
     /// For SwiftUI binding reads.
     func uiIsEnabled(_ id: String) -> Bool {
         states[id] ?? false
+    }
+
+    /// Reloads all settings from UserDefaults (e.g. after settings import).
+    /// Must be called on the main thread.
+    func reloadFromDefaults() {
+        let defaults = UserDefaults.standard
+        os_unfair_lock_lock(&enabledLock)
+        for info in Self.all {
+            let key = "gesture.\(info.id)"
+            let value: Bool
+            if let stored = defaults.object(forKey: key) as? Bool {
+                value = stored
+            } else {
+                value = info.defaultEnabled
+            }
+            states[info.id] = value
+            enabledCache[info.id] = value
+
+            if let raw = defaults.string(forKey: "action.\(info.id)"),
+               let action = KeySynthesizer.Action(rawValue: raw) {
+                actionCache[info.id] = action
+            } else {
+                actionCache[info.id] = KeySynthesizer.defaultActions[info.id]
+            }
+        }
+        os_unfair_lock_unlock(&enabledLock)
+
+        cachedHudEnabled = defaults.object(forKey: "hudEnabled") as? Bool ?? false
+        cachedHapticEnabled = defaults.object(forKey: "hapticEnabled") as? Bool ?? true
+        cachedCooldownEnabled = defaults.object(forKey: "cooldownEnabled") as? Bool ?? false
+        loadCooldownOverrides()
+        refreshCache()
+
+        // Reload app overrides
+        os_unfair_lock_lock(&appOverridesLock)
+        if let dict = defaults.dictionary(forKey: "appOverrides") as? [String: [String]] {
+            cachedAppOverrides = dict.mapValues { Set($0) }
+        } else {
+            cachedAppOverrides = [:]
+        }
+        os_unfair_lock_unlock(&appOverridesLock)
+
+        objectWillChange.send()
     }
 
     // MARK: - Action Remapping
@@ -635,6 +675,11 @@ final class GestureConfig: ObservableObject {
     /// Only written under engineLock (touch callback), only read under engineLock (recognizers).
     var frameSnapshot = SensitivitySnapshot(tapSpeed: 1.0, swipeMultiplier: 1.0, moveMultiplier: 1.0)
 
+    /// Per-frame cache of the current app's disabled gesture set.
+    /// Avoids acquiring appOverridesLock on every isEnabled() call.
+    /// Only written/read under engineLock (touch callback thread).
+    private(set) var frameAppOverrides: Set<String>?
+
     /// Updates frameSnapshot from cached values (call once per touch frame under engineLock).
     func updateFrameSnapshot() {
         os_unfair_lock_lock(&enabledLock)
@@ -643,7 +688,17 @@ final class GestureConfig: ObservableObject {
             swipeMultiplier: cachedSwipeMultiplier,
             moveMultiplier: cachedMoveMultiplier
         )
+        let bundleId = _cachedFrontmostBundleId
         os_unfair_lock_unlock(&enabledLock)
+
+        // Snapshot current app's overrides (single appOverridesLock acquisition per frame)
+        if let bundleId {
+            os_unfair_lock_lock(&appOverridesLock)
+            frameAppOverrides = cachedAppOverrides?[bundleId]
+            os_unfair_lock_unlock(&appOverridesLock)
+        } else {
+            frameAppOverrides = nil
+        }
     }
 
     // Effective threshold values — read from frameSnapshot (no individual locking needed).

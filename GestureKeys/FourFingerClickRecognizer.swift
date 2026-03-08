@@ -1,15 +1,16 @@
 import Foundation
 
 /// Recognizes four-finger physical click on trackpad.
-/// Short click → toggle fullscreen (⌃⌘F). Long hold click → hide app (⌘H).
+/// Short click → toggle fullscreen (⌃⌘F). Force Touch click → hide app (⌘H).
 ///
 /// State machine:
 /// ```
 /// [Idle] → 4 active touches → [FourDown]
-/// [FourDown] + physical click (if longClick enabled) → [ClickHeld]
-/// [FourDown] + physical click (if longClick disabled) → fire normal → [Cooldown]
-/// [ClickHeld] + fingers lift before holdDuration → fire normal click → [Cooldown]
-/// [ClickHeld] + holdDuration elapsed with fingers still down → fire long click → [Cooldown]
+/// [FourDown] + physical click (if forceClick enabled) → [ClickHeld]
+/// [FourDown] + physical click (if forceClick disabled) → fire normal → [Cooldown]
+/// [ClickHeld] + fingers lift → fire normal click → [Cooldown]
+/// [ClickHeld] + Force Touch pressure detected → fire force click → [Cooldown]
+/// [ClickHeld] + timeout (2s) → fire normal click → [Cooldown]
 /// [FourDown] + 5+ fingers → [Idle]
 /// [FourDown] + fingers < 4 → [Idle] (after grace period)
 /// [Cooldown] (200ms) → [Idle]
@@ -29,14 +30,28 @@ final class FourFingerClickRecognizer {
     private let cooldownDuration: TimeInterval = 0.2
     private let gracePeriod: TimeInterval = 0.200
 
-    /// How long the user must hold after clicking to trigger long click action.
-    private let holdDuration: TimeInterval = 0.5
+    // MARK: - Force Touch Constants
+
+    /// Time after click to let pressure stabilize before Force Touch detection.
+    private let stabilizationDuration: TimeInterval = 0.15
+
+    /// Force Touch fires when max pressure exceeds basePressure × this multiplier.
+    private let forceTouchMultiplier: Float = 1.5
+
+    /// Safety timeout: if clickHeld exceeds this, fire normal click to prevent stuck state.
+    private let clickHeldTimeout: TimeInterval = 2.0
+
+    // MARK: - Tracking State
 
     private var initialPositions: [Int32: (x: Float, y: Float)] = [:]
     private var cooldownStart: TimeInterval = 0
     private var clickHeldStart: TimeInterval = 0
     private var dropTime: TimeInterval = 0
     private(set) var activeTouchCount: Int = 0
+
+    /// Peak pressure recorded during stabilization window (normal click baseline).
+    private var basePressure: Float = 0
+    private var didLogStabilization: Bool = false
 
     func processTouches(_ activeTouches: [MTTouch], timestamp: TimeInterval) {
         activeTouchCount = activeTouches.count
@@ -69,6 +84,7 @@ final class FourFingerClickRecognizer {
 
         case .clickHeld:
             let now = ProcessInfo.processInfo.systemUptime
+            let elapsed = now - clickHeldStart
 
             // Fingers lifted → fire normal click
             if activeTouches.count < 4 {
@@ -82,8 +98,28 @@ final class FourFingerClickRecognizer {
                 return
             }
 
-            // Held long enough → fire long click (hide app)
-            if now - clickHeldStart >= holdDuration {
+            let maxPressure = activeTouches.map(\.pressure).max() ?? 0
+
+            // Phase 1: Stabilization (first 150ms after click)
+            if elapsed < stabilizationDuration {
+                if maxPressure > basePressure {
+                    basePressure = maxPressure
+                }
+                return
+            }
+
+            if !didLogStabilization {
+                didLogStabilization = true
+                NSLog("GestureKeys: 4FC stabilized base pressure: %.2f", basePressure)
+            }
+
+            // Phase 2: Force Touch detection
+            let forceTouchDetected = basePressure > 0
+                && maxPressure > basePressure * forceTouchMultiplier
+
+            if forceTouchDetected {
+                NSLog("GestureKeys: 4FC Force Touch fired! base=%.2f current=%.2f (×%.2f)",
+                      basePressure, maxPressure, maxPressure / basePressure)
                 if GestureConfig.shared.isEnabled("fourFingerLongClick") {
                     KeySynthesizer.fireAction(gestureId: "fourFingerLongClick")
                     state = .cooldown
@@ -91,6 +127,12 @@ final class FourFingerClickRecognizer {
                 } else {
                     fireNormalClick()
                 }
+                return
+            }
+
+            // Safety timeout
+            if elapsed >= clickHeldTimeout {
+                fireNormalClick()
             }
 
         case .cooldown:
@@ -110,10 +152,12 @@ final class FourFingerClickRecognizer {
     func handlePhysicalClick() -> ClickResult {
         guard state == .fourDown else { return .none }
 
-        // If long click gesture is enabled, defer to measure hold duration
+        // If force click gesture is enabled, defer to detect Force Touch pressure
         if GestureConfig.shared.isEnabled("fourFingerLongClick") {
             state = .clickHeld
             clickHeldStart = ProcessInfo.processInfo.systemUptime
+            basePressure = 0
+            didLogStabilization = false
             return .clickHeld
         }
 
@@ -140,5 +184,7 @@ final class FourFingerClickRecognizer {
         dropTime = 0
         cooldownStart = 0
         clickHeldStart = 0
+        basePressure = 0
+        didLogStabilization = false
     }
 }

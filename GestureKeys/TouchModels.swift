@@ -62,9 +62,9 @@ struct MTTouch {
     // Compile-time verification: MTTouch must be exactly 96 bytes to match
     // the C struct layout from MultitouchSupport.framework.
     static let _sizeCheck: Void = {
-        assert(MemoryLayout<MTTouch>.size == 96,
+        precondition(MemoryLayout<MTTouch>.size == 96,
                "MTTouch size mismatch: expected 96, got \(MemoryLayout<MTTouch>.size)")
-        assert(MemoryLayout<MTTouch>.stride == 96,
+        precondition(MemoryLayout<MTTouch>.stride == 96,
                "MTTouch stride mismatch: expected 96, got \(MemoryLayout<MTTouch>.stride)")
     }()
 

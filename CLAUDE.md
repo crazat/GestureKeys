@@ -67,12 +67,12 @@ GestureKeys/
     ├── GestureHUD.swift                 # 제스처 인식 HUD 표시
     ├── KeyCaptureView.swift             # 사용자 지정 키 캡처
     │
-    ├── ThreeFingerClickRecognizer.swift  # 3손가락 클릭 → 탭 닫기 ★최우선 (존 지원), 길게 클릭 → 앱 종료
-    ├── FourFingerClickRecognizer.swift   # 4손가락 클릭 → 전체화면, 길게 클릭 → 앱 숨기기
-    ├── FiveFingerClickRecognizer.swift   # 5손가락 클릭 → 강제 종료
+    ├── ThreeFingerClickRecognizer.swift  # 3손가락 클릭 → 탭 닫기 ★최우선 (존 지원), Force Touch → 앱 종료
+    ├── FourFingerClickRecognizer.swift   # 4손가락 클릭 → 전체화면, Force Touch → 앱 숨기기
+    ├── FiveFingerClickRecognizer.swift   # 5손가락 Force Touch 클릭 → 강제 종료 (일반 클릭 무시)
     ├── TapWhileHoldingRecognizer.swift   # 2홀드 + 탭 → 새로고침/새 탭
     ├── SwipeWhileHoldingRecognizer.swift # 2홀드 + 스와이프 → 탭 이동 등
-    ├── LongPressWhileHoldingRecognizer.swift # 2홀드 + 길게 → 다시 실행/저장
+    ├── LongPressWhileHoldingRecognizer.swift # 2홀드 + 길게 → 저장/실행취소
     ├── ThreeFingerDoubleTapRecognizer.swift  # 3손가락 더블탭 → 붙여넣기 (존 지원)
     ├── ThreeFingerTripleTapRecognizer.swift  # 3손가락 트리플탭 → 실행취소
     ├── ThreeFingerLongPressRecognizer.swift  # 3손가락 길게 → 복사
@@ -123,10 +123,10 @@ AXIsProcessTrusted() → engine.start() or 폴링
 - `NX_SYSDEFINED` (미디어/밝기 키) 인터셉트: Shift+밝기 키 → 키보드 백라이트 변환
 - 3/4/5손가락 클릭 시 `nil` 반환으로 시스템 클릭 억제
 - 우선순위: 5FC > 4FC > **3FC (최우선, 다른 3손가락 제스처에 의해 차단되지 않음)**
-- 5FC 발동 시 5FT, 5FLP, 4FDT, 4FLP 리셋
-- 4FC 발동(.fired) 시 클릭 억제, 4FC 길게 클릭(.clickHeld) 시 4FDT, 4FLP 리셋
+- 5FC 발동(clickHeld) 시 5FT, 5FLP, 4FDT, 4FLP 리셋 — Force Touch 대기 중 경쟁 방지
+- 4FC 발동(.fired) 시 클릭 억제, 4FC Force Touch(.clickHeld) 시 4FDT, 4FLP 리셋
 - 3FC 발동(.fired) 시 경쟁 인식기 전부 리셋 (TWH, SWH, LPWH, 3FDT, 3FTT, 3FLP, 3FSwipe)
-- 3FC 길게 클릭(.clickHeld) 시에도 동일하게 리셋 — 물리 클릭이 long press(복사)와 구분 기준
+- 3FC Force Touch(.clickHeld) 시에도 동일하게 리셋 — 물리 클릭이 long press(복사)와 구분 기준
 
 ### 제스처 우선순위 & 충돌 해소 (processTouches 순서)
 
@@ -205,9 +205,9 @@ final class XxxRecognizer {
 | ID | 제스처 | 액션 | 기본값 |
 |----|--------|------|--------|
 | threeFingerClick | 3손가락 클릭 | 탭 닫기 (⌘W) | ON |
-| threeFingerLongClick | 3손가락 길게 클릭 | 앱 종료 (⌘Q) | OFF |
+| threeFingerLongClick | 3손가락 세게 클릭 (Force Touch) | 앱 종료 (⌘Q) | OFF |
 | fourFingerClick | 4손가락 클릭 | 전체화면 (⌃⌘F) | ON |
-| fourFingerLongClick | 4손가락 길게 클릭 | 앱 숨기기 (⌘H) | OFF |
+| fourFingerLongClick | 4손가락 세게 클릭 (Force Touch) | 앱 숨기기 (⌘H) | OFF |
 | swhUp | 2홀드 + 스와이프 ↑ | 새 창 (⌘N) | ON |
 | swhDown | 2홀드 + 스와이프 ↓ | 최소화 (⌘M) | ON |
 
@@ -218,8 +218,8 @@ final class XxxRecognizer {
 | threeFingerDoubleTap | 3손가락 더블탭 | 붙여넣기 (⌘V) | ON |
 | threeFingerLongPress | 3손가락 길게 누르기 | 복사 (⌘C) | ON |
 | threeFingerTripleTap | 3손가락 트리플탭 | 실행취소 (⌘Z) | ON |
-| twhLeftLongPress | 2홀드 + 왼쪽 길게 | 다시 실행 (⇧⌘Z) | OFF |
-| twhRightLongPress | 2홀드 + 오른쪽 길게 | 저장 (⌘S) | OFF |
+| twhLeftLongPress | 2홀드 + 왼쪽 길게 | 저장 (⌘S) | OFF |
+| twhRightLongPress | 2홀드 + 오른쪽 길게 | 실행취소 (⌘Z) | OFF |
 
 ### 시스템
 | ID | 제스처 | 액션 | 기본값 |
@@ -231,7 +231,7 @@ final class XxxRecognizer {
 | fourFingerDoubleTap | 4손가락 더블탭 | 스크린샷 (⇧⌘4) | OFF |
 | fourFingerLongPress | 4손가락 길게 | 전체 선택 (⌘A) | OFF |
 | fiveFingerTap | 5손가락 탭 | 잠금화면 (⌃⌘Q) | OFF |
-| fiveFingerClick | 5손가락 클릭 | 강제 종료 (⌥⌘Esc) | OFF |
+| fiveFingerClick | 5손가락 세게 클릭 (Force Touch 필수) | 강제 종료 (⌥⌘Esc) | OFF |
 | fiveFingerLongPress | 5손가락 길게 | 화면 끄기 | OFF |
 
 ## 화면 끄기 (Display Sleep)
@@ -284,7 +284,9 @@ final class XxxRecognizer {
 | multiTapWindow | 0.35~0.40s | 더블탭 간격 |
 | holdDuration | 0.10~0.20s | 홀드 인식 시간 |
 | longPressDuration | 0.30~0.50s | 길게 누르기 인식 |
-| holdDuration (longClick) | 0.50s | 클릭 후 유지 시간 (3FC/4FC 길게 클릭) |
+| stabilizationDuration (Force Touch) | 0.15s | Force Touch 기준 압력 측정 구간 (3FC/4FC/5FC) |
+| forceTouchMultiplier | 1.5 | Force Touch 판정: basePressure × 1.5 초과 시 발동 |
+| clickHeldTimeout | 2.0s | Force Touch 안전 타임아웃 (3FC/4FC → 일반 클릭, 5FC → 취소) |
 | gracePeriod (클릭) | 0.20s | 클릭 인식기 손가락 이탈 유예 (물리 클릭 커버) |
 | gracePeriod (기타) | 0.08s | 나머지 인식기 손가락 ramping 허용 |
 | firedTimeout | 2.0s | `.fired` 상태 자동 리셋 타임아웃 (stuck 방지) |
@@ -297,8 +299,8 @@ WindowServer 시스템 레벨 단축키라 CGEvent.post 불가. osascript + Syst
 ### 재빌드 후 접근성 권한
 Apple Development 인증서로 서명하므로 재빌드해도 접근성 권한이 유지됨. 인증서가 만료/변경된 경우에만 시스템 설정에서 재허용 필요.
 
-### 길게 클릭 (Long Click) 패턴 제약
-클릭 후 0.5초 유지로 다른 액션 실행. 3FC/4FC에서 사용. **5손가락에서는 실패** — 5손가락 배치에 0.3~0.5초가 걸려 long press(0.5초)가 먼저 발동됨. 손가락 수가 많을수록 배치 시간이 길어 long click 타이밍 확보 불가. 충돌 해소: clickHeld 상태일 때 해당 long press recognizer의 `processTouches` 호출 자체를 건너뜀 (3FLP, 4FLP).
+### Force Touch 클릭 (3FC/4FC/5FC)
+3FC/4FC/5FC의 "세게 클릭"은 Force Touch 압력 감지로 발동. 클릭 후 150ms 안정화 구간에서 기준 압력(basePressure)을 기록하고, 이후 압력이 basePressure × 1.5를 초과하면 Force Touch로 판정. 2초 안전 타임아웃: 3FC/4FC는 일반 클릭 발동, 5FC는 아무 동작 없이 취소 (안전 장치). clickHeld 상태일 때 해당 long press recognizer의 `processTouches` 호출을 건너뜀 (3FLP, 4FLP).
 
 ### 3손가락 클릭 reliability
 물리 클릭 시 손가락이 밀리면서 터치 카운트가 일시적으로 3 아래로 떨어짐. grace period 200ms + moveThreshold 0.08 + 3FC 최우선 우선순위로 대응. 3손가락 스와이프는 기본 OFF (3FC와 충돌).

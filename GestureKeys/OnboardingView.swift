@@ -5,7 +5,10 @@ import AppKit
 struct OnboardingView: View {
 
     @State private var currentPage = 0
+    @State private var hasPermission = AXIsProcessTrusted()
     @Environment(\.dismiss) private var dismiss
+
+    private let permissionTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -52,6 +55,9 @@ struct OnboardingView: View {
             .padding(16)
         }
         .frame(width: 440, height: 380)
+        .onReceive(permissionTimer) { _ in
+            hasPermission = AXIsProcessTrusted()
+        }
     }
 
     private var welcomePage: some View {
@@ -74,18 +80,29 @@ struct OnboardingView: View {
     private var permissionPage: some View {
         VStack(spacing: 16) {
             Spacer()
-            Image(systemName: "lock.shield")
-                .font(.system(size: 48))
-                .foregroundColor(.orange)
-            Text("접근성 권한 설정")
-                .font(.title2)
-                .fontWeight(.bold)
-            Text("GestureKeys가 트랙패드 제스처를 인식하고\n키 입력을 시뮬레이션하려면 접근성 권한이 필요합니다.")
-                .multilineTextAlignment(.center)
-                .foregroundColor(.secondary)
-            Button("시스템 설정 열기") {
-                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-                    NSWorkspace.shared.open(url)
+            if hasPermission {
+                Image(systemName: "checkmark.shield.fill")
+                    .font(.system(size: 48))
+                    .foregroundColor(.green)
+                Text("접근성 권한이 허용되었습니다!")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                Text("다음 단계로 진행하세요.")
+                    .foregroundColor(.secondary)
+            } else {
+                Image(systemName: "lock.shield")
+                    .font(.system(size: 48))
+                    .foregroundColor(.orange)
+                Text("접근성 권한 설정")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                Text("GestureKeys가 트랙패드 제스처를 인식하고\n키 입력을 시뮬레이션하려면 접근성 권한이 필요합니다.")
+                    .multilineTextAlignment(.center)
+                    .foregroundColor(.secondary)
+                Button("시스템 설정 열기") {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                        NSWorkspace.shared.open(url)
+                    }
                 }
             }
             Spacer()
@@ -157,6 +174,7 @@ final class OnboardingWindowController {
         let window = NSWindow(contentViewController: hostingController)
         window.title = "GestureKeys"
         window.styleMask = [.titled, .closable]
+        window.setFrameAutosaveName("OnboardingWindow")
         window.center()
         window.isReleasedWhenClosed = false
         window.makeKeyAndOrderFront(nil)

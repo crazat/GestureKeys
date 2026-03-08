@@ -1,7 +1,7 @@
 import AppKit
 
 /// Manages the menu bar status item and dropdown menu.
-final class MenuBarController {
+final class MenuBarController: NSObject, NSMenuDelegate {
 
     enum EngineState {
         case active
@@ -17,6 +17,7 @@ final class MenuBarController {
     init(engine: GestureEngine) {
         self.engine = engine
         self.isEnabled = UserDefaults.standard.object(forKey: "engineEnabled") as? Bool ?? true
+        super.init()
     }
 
     func setup() {
@@ -63,6 +64,14 @@ final class MenuBarController {
         cheatSheetItem.target = self
         menu.addItem(cheatSheetItem)
 
+        let statsItem = NSMenuItem(
+            title: "통계...",
+            action: #selector(openStats(_:)),
+            keyEquivalent: ""
+        )
+        statsItem.target = self
+        menu.addItem(statsItem)
+
         menu.addItem(NSMenuItem.separator())
 
         let quitItem = NSMenuItem(
@@ -73,6 +82,7 @@ final class MenuBarController {
         quitItem.target = self
         menu.addItem(quitItem)
 
+        menu.delegate = self
         item.menu = menu
         statusItem = item
 
@@ -164,10 +174,21 @@ final class MenuBarController {
         CheatSheetWindowController.shared.show()
     }
 
+    @objc private func openStats(_ sender: NSMenuItem) {
+        StatsWindowController.shared.show()
+    }
+
     @objc private func quit(_ sender: NSMenuItem) {
         permissionTimer?.invalidate()
         NotificationCenter.default.removeObserver(self)
         engine.stop()
         NSApp.terminate(nil)
+    }
+
+    // MARK: - NSMenuDelegate
+
+    func menuWillOpen(_ menu: NSMenu) {
+        let todayCount = GestureStats.shared.totalFires(days: 1)
+        statusItem?.button?.toolTip = "GestureKeys — 오늘 \(todayCount)회 사용"
     }
 }

@@ -254,6 +254,7 @@ final class StatsWindowController {
             defer: false
         )
         window.title = "제스처 통계"
+        window.setFrameAutosaveName("StatsWindow")
         window.center()
         window.contentView = NSHostingView(rootView: StatsView())
 
