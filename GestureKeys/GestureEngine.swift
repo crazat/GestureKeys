@@ -265,6 +265,7 @@ final class GestureEngine {
     private var runLoopSource: CFRunLoopSource?
     private var isRunning = false
     private var deviceRecoveryTimer: Timer?
+    private var eventTapHealthTimer: Timer?
     private var eventTapRetryTimer: Timer?
     private var eventTapRetryCount = 0
     private let maxEventTapRetries = 5
@@ -317,6 +318,7 @@ final class GestureEngine {
         startMultitouchDevices()
         installEventTap()
         startDeviceRecovery()
+        startEventTapHealthCheck()
         observeSystemUI()
         isRunning = true
 
@@ -329,6 +331,8 @@ final class GestureEngine {
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         deviceRecoveryTimer?.invalidate()
         deviceRecoveryTimer = nil
+        eventTapHealthTimer?.invalidate()
+        eventTapHealthTimer = nil
         eventTapRetryTimer?.invalidate()
         eventTapRetryTimer = nil
         // Order matters: remove event tap first so callbacks can't fire on stopped devices.
@@ -882,6 +886,10 @@ final class GestureEngine {
         }
         if let tap = tap {
             CGEvent.tapEnable(tap: tap, enable: false)
+            // Invalidate the Mach port so the system fully releases the event tap
+            // registration. Without this, the old tap lingers at the system level
+            // and can prevent a new tap from being created successfully.
+            CFMachPortInvalidate(tap)
         }
     }
 
@@ -968,8 +976,35 @@ final class GestureEngine {
             NSLog("GestureKeys: Re-registered %d multitouch device(s) after wake", self.devices.count)
         }
 
-        // Proactively re-enable EventTap (macOS may disable it during sleep)
-        reEnableEventTap()
+        // Fully reinstall EventTap after wake. macOS may have invalidated
+        // the Mach port during sleep, making re-enable alone insufficient.
+        // Delay slightly to let the system settle after wake.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+            guard let self, self.isRunning else { return }
+            self.reinstallEventTap()
+        }
+    }
+
+    // MARK: - EventTap Health Check
+
+    /// Periodically verifies the EventTap is still valid. If the Mach port has
+    /// been invalidated by the system (e.g. after sleep, screen lock, or prolonged
+    /// inactivity), automatically reinstalls the tap without user intervention.
+    private func startEventTapHealthCheck() {
+        eventTapHealthTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
+            guard let self, self.isRunning else { return }
+            os_unfair_lock_lock(&engineLock)
+            let tap = self.eventTap
+            let active = self.eventTapActive
+            os_unfair_lock_unlock(&engineLock)
+
+            guard active, let tap = tap else { return }
+
+            if !CFMachPortIsValid(tap) {
+                NSLog("GestureKeys: EventTap Mach port invalidated — reinstalling")
+                self.reinstallEventTap()
+            }
+        }
     }
 
     // MARK: - Device Recovery
