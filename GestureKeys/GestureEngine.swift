@@ -339,6 +339,7 @@ final class GestureEngine {
         startDeviceRecovery()
         startEventTapHealthCheck()
         observeSystemUI()
+        KeySynthesizer.startObservingInputSourceChanges()
         isRunning = true
 
         NSLog("GestureKeys: Engine started with %d device(s)", devices.count)
@@ -357,6 +358,7 @@ final class GestureEngine {
         // Order matters: remove event tap first so callbacks can't fire on stopped devices.
         removeEventTap()
         stopMultitouchDevices()
+        KeySynthesizer.invalidateInputSourceCache()
 
         os_unfair_lock_lock(&engineLock)
         engineInstance = nil

@@ -50,7 +50,7 @@ final class GestureConfig: ObservableObject {
             Info(id: "threeFingerClick",      name: "세 손가락 클릭",             action: "탭 닫기 (⌘W)",               defaultEnabled: true,
                  howTo: "세 손가락을 트랙패드에 올린 뒤, 물리적으로 트랙패드를 꾹 눌러 클릭하세요."),
             Info(id: "threeFingerLongClick",  name: "세 손가락 세게 클릭",         action: "앱 종료 (⌘Q)",               defaultEnabled: false,
-                 howTo: "세 손가락을 트랙패드에 올린 뒤 세게 눌러 클릭하세요 (Force Touch). Force Touch 미지원 시 0.5초 유지로 동작합니다."),
+                 howTo: "세 손가락을 트랙패드에 올린 뒤 세게 눌러 클릭하세요 (Force Touch). 바로 떼면 탭 닫기입니다."),
             Info(id: "fourFingerClick",       name: "네 손가락 클릭",             action: "전체화면 토글 (⌃⌘F)",        defaultEnabled: true,
                  howTo: "네 손가락을 트랙패드에 올린 뒤, 물리적으로 트랙패드를 꾹 눌러 클릭하세요."),
             Info(id: "fourFingerLongClick",  name: "네 손가락 세게 클릭",         action: "앱 숨기기 (⌘H)",            defaultEnabled: false,

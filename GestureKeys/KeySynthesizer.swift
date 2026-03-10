@@ -480,31 +480,107 @@ enum KeySynthesizer {
 
     // MARK: - Input Source Toggle
 
-    /// Toggles the keyboard input source (e.g. Korean ↔ English).
-    /// Uses Carbon TIS API for instant switching without macOS Caps Lock delay.
-    static func postToggleInputSource() {
+    /// Cached selectable keyboard input sources. Built once, invalidated on system notification.
+    private static var cachedSources: [TISInputSource]?
+    /// Maps input source ID → index in `cachedSources` for O(1) lookup.
+    private static var sourceIdToIndex: [String: Int] = [:]
+    /// Lock protecting cached input source data.
+    private static var inputSourceLock = os_unfair_lock()
+    /// Whether we registered for the input source change notification.
+    private static var observingInputSourceChanges = false
+
+    /// Registers for system input source change notifications to invalidate cache.
+    static func startObservingInputSourceChanges() {
+        guard !observingInputSourceChanges else { return }
+        observingInputSourceChanges = true
+        DistributedNotificationCenter.default().addObserver(
+            forName: .init(kTISNotifyEnabledKeyboardInputSourcesChanged as String),
+            object: nil, queue: nil
+        ) { _ in
+            os_unfair_lock_lock(&inputSourceLock)
+            cachedSources = nil
+            sourceIdToIndex = [:]
+            os_unfair_lock_unlock(&inputSourceLock)
+        }
+    }
+
+    /// Rebuilds the cached input source list.
+    private static func rebuildSourceCache() -> [TISInputSource]? {
+        guard let category = kTISCategoryKeyboardInputSource else { return nil }
         let conditions = [
-            kTISPropertyInputSourceCategory: kTISCategoryKeyboardInputSource!,
+            kTISPropertyInputSourceCategory: category,
             kTISPropertyInputSourceIsSelectCapable: kCFBooleanTrue!
         ] as CFDictionary
         guard let sourcesCF = TISCreateInputSourceList(conditions, false)?
                 .takeRetainedValue() as? [TISInputSource],
               sourcesCF.count >= 2
-        else { return }
+        else { return nil }
 
-        let current = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
-        guard let curIdPtr = TISGetInputSourceProperty(current, kTISPropertyInputSourceID) else { return }
-        let curId = Unmanaged<CFString>.fromOpaque(curIdPtr).takeUnretainedValue() as String
-
-        var currentIdx = 0
+        var idMap: [String: Int] = [:]
         for (i, src) in sourcesCF.enumerated() {
-            if let p = TISGetInputSourceProperty(src, kTISPropertyInputSourceID),
-               (Unmanaged<CFString>.fromOpaque(p).takeUnretainedValue() as String) == curId {
-                currentIdx = i
-                break
+            if let p = TISGetInputSourceProperty(src, kTISPropertyInputSourceID) {
+                let srcId = Unmanaged<CFString>.fromOpaque(p).takeUnretainedValue() as String
+                idMap[srcId] = i
             }
         }
-        TISSelectInputSource(sourcesCF[(currentIdx + 1) % sourcesCF.count])
+
+        os_unfair_lock_lock(&inputSourceLock)
+        cachedSources = sourcesCF
+        sourceIdToIndex = idMap
+        os_unfair_lock_unlock(&inputSourceLock)
+        return sourcesCF
+    }
+
+    /// Invalidates the cached input source list so it is rebuilt on next toggle.
+    static func invalidateInputSourceCache() {
+        os_unfair_lock_lock(&inputSourceLock)
+        cachedSources = nil
+        sourceIdToIndex = [:]
+        os_unfair_lock_unlock(&inputSourceLock)
+    }
+
+    /// Core toggle logic. Returns true if the switch succeeded.
+    private static func performToggle(sources: [TISInputSource], idMap: [String: Int]) -> Bool {
+        let current = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
+        guard let curIdPtr = TISGetInputSourceProperty(current, kTISPropertyInputSourceID) else { return false }
+        let curId = Unmanaged<CFString>.fromOpaque(curIdPtr).takeUnretainedValue() as String
+
+        let currentIdx = idMap[curId] ?? 0
+        let status = TISSelectInputSource(sources[(currentIdx + 1) % sources.count])
+        return status == noErr
+    }
+
+    /// Toggles the keyboard input source (e.g. Korean ↔ English).
+    /// Uses Carbon TIS API with cached source list for minimal latency.
+    /// Runs synchronously so the switch completes before the next key event
+    /// reaches the EventTap — prevents first-keystroke-in-wrong-source race.
+    /// With caching, total block time is ~6-25ms (safe for EventTap).
+    /// On failure (stale cache), invalidates and retries once.
+    static func postToggleInputSource() {
+        // Read cached sources
+        os_unfair_lock_lock(&inputSourceLock)
+        var sources = cachedSources
+        var idMap = sourceIdToIndex
+        os_unfair_lock_unlock(&inputSourceLock)
+
+        // Rebuild cache if needed (first call or after invalidation)
+        if sources == nil {
+            sources = rebuildSourceCache()
+            os_unfair_lock_lock(&inputSourceLock)
+            idMap = sourceIdToIndex
+            os_unfair_lock_unlock(&inputSourceLock)
+        }
+
+        guard let sources, sources.count >= 2 else { return }
+
+        if performToggle(sources: sources, idMap: idMap) { return }
+
+        // Toggle failed — cached sources likely stale. Invalidate and retry once.
+        guard let freshSources = rebuildSourceCache(), freshSources.count >= 2 else { return }
+        os_unfair_lock_lock(&inputSourceLock)
+        let freshMap = sourceIdToIndex
+        os_unfair_lock_unlock(&inputSourceLock)
+        _ = performToggle(sources: freshSources, idMap: freshMap)
     }
 
     // MARK: - Synthesis Timestamp (for palm rejection)

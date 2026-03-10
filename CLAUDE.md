@@ -146,6 +146,7 @@ AXIsProcessTrusted() → engine.start() or 폴링
 - `synthesisLock`: `KeySynthesizer.lastSynthesisTimestamp` 보호 (CGEventTap 콜백 읽기 ↔ 키 합성 쓰기)
 - `enabledLock`: `GestureConfig.enabledCache` + `cachedFrontmostBundleId` 보호 (터치 콜백 읽기 ↔ UI 쓰기)
 - `appOverridesLock`: 앱별 오버라이드 캐시 보호
+- `inputSourceLock`: `KeySynthesizer.cachedSources`/`sourceIdToIndex` 보호 (EventTap 콜백 읽기 ↔ 알림 콜백 무효화)
 - `GestureStats.lock`: 통계 레코드 읽기/쓰기 보호
 - **지연 실행 패턴**: `fireAction()`이 `pendingActions`에 클로저 버퍼링 (engineLock 하), lock 해제 후 실행. CGEvent 포스팅이 lock 밖에서 실행되어 lock 점유 시간 최소화
 - UI 쓰기는 메인 스레드 (@Published + SwiftUI)
@@ -254,7 +255,10 @@ final class XxxRecognizer {
 - **통계**: `GestureStats.shared` 일별 집계 30일 보관, `StatsView` 대시보드 + 추천
 - **크래시 리포팅**: `CrashReporter` → `~/Library/Logs/GestureKeys/crash.log`
 - **설정 마이그레이션**: `SettingsMigration` 순차 체인, `currentVersion` 범프로 스키마 변경 대응
-- **Caps Lock 한영전환**: EventTap에서 Caps Lock(0x39) 인터셉트 → Carbon TIS API(`TISCreateInputSourceList`/`TISSelectInputSource`)로 즉시 입력 소스 전환 (macOS 딜레이 없음). `GestureConfig.capsLockInputSwitch` 토글. 50ms 디바운스. **주의**: macOS 시스템 설정의 "Caps Lock으로 입력 소스 전환"은 꺼야 이중 전환 방지.
+- **Caps Lock 한영전환**: EventTap에서 Caps Lock(0x39) 인터셉트 → Carbon TIS API로 즉시 입력 소스 전환 (macOS 딜레이 없음). `GestureConfig.capsLockInputSwitch` 토글. 50ms 디바운스. **주의**: macOS 시스템 설정의 "Caps Lock으로 입력 소스 전환"은 꺼야 이중 전환 방지.
+  - **캐싱**: `TISCreateInputSourceList` 결과를 캐시 (`cachedSources`/`sourceIdToIndex`). `kTISNotifyEnabledKeyboardInputSourcesChanged` 알림으로 자동 무효화. O(1) 해시맵 룩업.
+  - **동기 실행**: EventTap 콜백에서 동기 실행하여 전환 완료 전에 다음 키 이벤트가 처리되지 않도록 보장 (영→한 첫 글자 race 방지). 캐시 히트 시 ~6-25ms.
+  - **실패 복구**: `TISSelectInputSource` 실패 시 캐시 무효화 + 1회 재시도. 엔진 stop 시 캐시 정리 (`invalidateInputSourceCache()`).
 - **한영전환 액션**: `KeySynthesizer.Action.toggleInputSource` — 어떤 제스처든 한영전환에 매핑 가능
 
 ## 성능 & 안정성 원칙
@@ -302,7 +306,7 @@ WindowServer 시스템 레벨 단축키라 CGEvent.post 불가. osascript + Syst
 Apple Development 인증서로 서명하므로 재빌드해도 접근성 권한이 유지됨. 인증서가 만료/변경된 경우에만 시스템 설정에서 재허용 필요.
 
 ### Force Touch 클릭 (3FC/4FC/5FC)
-3FC/4FC/5FC의 "세게 클릭"은 Force Touch 압력 감지로 발동. 클릭 후 150ms 안정화 구간에서 기준 압력(basePressure)을 기록하고, 이후 압력이 basePressure × 1.5를 초과하면 Force Touch로 판정. 2초 안전 타임아웃: 3FC/4FC는 일반 클릭 발동, 5FC는 아무 동작 없이 취소 (안전 장치). clickHeld 상태일 때 해당 long press recognizer의 `processTouches` 호출을 건너뜀 (3FLP, 4FLP).
+3FC/4FC/5FC의 "세게 클릭"은 Force Touch 압력 감지로 발동. 클릭 후 150ms 안정화 구간에서 기준 압력(basePressure)을 기록하고, 이후 압력이 basePressure × 1.5를 초과하면 Force Touch로 판정. 2초 안전 타임아웃: 3FC/4FC는 일반 클릭 발동, 5FC는 아무 동작 없이 취소 (안전 장치). clickHeld 상태일 때 해당 long press recognizer의 `processTouches` 호출을 건너뜀 (3FLP, 4FLP). **참고**: 2손가락 Force Touch는 시스템 우클릭(`.rightMouseDown`)과 충돌하여 구현 불가.
 
 ### 3손가락 클릭 reliability
 물리 클릭 시 손가락이 밀리면서 터치 카운트가 일시적으로 3 아래로 떨어짐. grace period 200ms + moveThreshold 0.08 + 3FC 최우선 우선순위로 대응. 3손가락 스와이프는 기본 OFF (3FC와 충돌).
