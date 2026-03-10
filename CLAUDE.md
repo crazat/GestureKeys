@@ -254,6 +254,8 @@ final class XxxRecognizer {
 - **통계**: `GestureStats.shared` 일별 집계 30일 보관, `StatsView` 대시보드 + 추천
 - **크래시 리포팅**: `CrashReporter` → `~/Library/Logs/GestureKeys/crash.log`
 - **설정 마이그레이션**: `SettingsMigration` 순차 체인, `currentVersion` 범프로 스키마 변경 대응
+- **Caps Lock 한영전환**: EventTap에서 Caps Lock(0x39) 인터셉트 → Carbon TIS API(`TISCreateInputSourceList`/`TISSelectInputSource`)로 즉시 입력 소스 전환 (macOS 딜레이 없음). `GestureConfig.capsLockInputSwitch` 토글. 50ms 디바운스. **주의**: macOS 시스템 설정의 "Caps Lock으로 입력 소스 전환"은 꺼야 이중 전환 방지.
+- **한영전환 액션**: `KeySynthesizer.Action.toggleInputSource` — 어떤 제스처든 한영전환에 매핑 가능
 
 ## 성능 & 안정성 원칙
 
@@ -321,6 +323,7 @@ macOS가 잠자기/화면잠금/시스템 부하 등으로 CGEventTap의 Mach po
 ## 의존성
 
 - **MultitouchSupport.framework** (Apple private) — `@_silgen_name` 바인딩
+- **Carbon.HIToolbox** (Apple) — TIS API (입력 소스 전환)
 - **ServiceManagement** (Apple) — `SMAppService` 로그인 시 자동 시작 (macOS 13+)
 - 외부 라이브러리 없음 (순수 네이티브)
 

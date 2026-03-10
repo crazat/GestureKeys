@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import CoreGraphics
+import Carbon
 
 /// Synthesizes keyboard shortcuts and app actions.
 enum KeySynthesizer {
@@ -45,6 +46,7 @@ enum KeySynthesizer {
         case sleepDisplay = "sleepDisplay"
         case kbBrightnessUp = "kbBrightnessUp"
         case kbBrightnessDown = "kbBrightnessDown"
+        case toggleInputSource = "toggleInputSource"
         case shortcut = "shortcut"
         case custom = "custom"
 
@@ -88,6 +90,7 @@ enum KeySynthesizer {
             case .sleepDisplay: return "화면 끄기"
             case .kbBrightnessUp: return "키보드 백라이트 증가"
             case .kbBrightnessDown: return "키보드 백라이트 감소"
+            case .toggleInputSource: return "한영전환 (⇪)"
             case .shortcut: return "Shortcuts 실행"
             case .custom: return "사용자 지정"
             }
@@ -131,6 +134,7 @@ enum KeySynthesizer {
             case .sleepDisplay: postSleepDisplay()
             case .kbBrightnessUp: postKbBrightnessUp()
             case .kbBrightnessDown: postKbBrightnessDown()
+            case .toggleInputSource: postToggleInputSource()
             case .shortcut: break // handled separately with shortcut name
             case .custom: break // handled separately with keyCode/flags
             }
@@ -230,6 +234,7 @@ enum KeySynthesizer {
         0x7A: "F1", 0x78: "F2", 0x63: "F3", 0x76: "F4",
         0x60: "F5", 0x61: "F6", 0x62: "F7", 0x64: "F8",
         0x65: "F9", 0x6D: "F10", 0x67: "F11", 0x6F: "F12",
+        0x39: "⇪",
         0x7B: "←", 0x7C: "→", 0x7D: "↓", 0x7E: "↑",
     ]
 
@@ -472,6 +477,35 @@ enum KeySynthesizer {
     static func postBrightnessDown()  { postSystemKey(3) }   // NX_KEYTYPE_BRIGHTNESS_DOWN
     static func postKbBrightnessUp()  { postSystemKey(21) }  // NX_KEYTYPE_ILLUMINATION_UP
     static func postKbBrightnessDown(){ postSystemKey(22) }  // NX_KEYTYPE_ILLUMINATION_DOWN
+
+    // MARK: - Input Source Toggle
+
+    /// Toggles the keyboard input source (e.g. Korean ↔ English).
+    /// Uses Carbon TIS API for instant switching without macOS Caps Lock delay.
+    static func postToggleInputSource() {
+        let conditions = [
+            kTISPropertyInputSourceCategory: kTISCategoryKeyboardInputSource!,
+            kTISPropertyInputSourceIsSelectCapable: kCFBooleanTrue!
+        ] as CFDictionary
+        guard let sourcesCF = TISCreateInputSourceList(conditions, false)?
+                .takeRetainedValue() as? [TISInputSource],
+              sourcesCF.count >= 2
+        else { return }
+
+        let current = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
+        guard let curIdPtr = TISGetInputSourceProperty(current, kTISPropertyInputSourceID) else { return }
+        let curId = Unmanaged<CFString>.fromOpaque(curIdPtr).takeUnretainedValue() as String
+
+        var currentIdx = 0
+        for (i, src) in sourcesCF.enumerated() {
+            if let p = TISGetInputSourceProperty(src, kTISPropertyInputSourceID),
+               (Unmanaged<CFString>.fromOpaque(p).takeUnretainedValue() as String) == curId {
+                currentIdx = i
+                break
+            }
+        }
+        TISSelectInputSource(sourcesCF[(currentIdx + 1) % sourcesCF.count])
+    }
 
     // MARK: - Synthesis Timestamp (for palm rejection)
 

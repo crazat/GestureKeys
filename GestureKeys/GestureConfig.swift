@@ -241,6 +241,7 @@ final class GestureConfig: ObservableObject {
         cachedHudEnabled = UserDefaults.standard.object(forKey: "hudEnabled") as? Bool ?? false
         cachedHapticEnabled = UserDefaults.standard.object(forKey: "hapticEnabled") as? Bool ?? true
         cachedCooldownEnabled = UserDefaults.standard.object(forKey: "cooldownEnabled") as? Bool ?? false
+        cachedCapsLockInputSwitch = UserDefaults.standard.object(forKey: "capsLockInputSwitch") as? Bool ?? false
         loadCooldownOverrides()
 
         // Pre-populate app overrides cache to avoid first-access allocation under lock
@@ -333,6 +334,9 @@ final class GestureConfig: ObservableObject {
         cachedHudEnabled = defaults.object(forKey: "hudEnabled") as? Bool ?? false
         cachedHapticEnabled = defaults.object(forKey: "hapticEnabled") as? Bool ?? true
         cachedCooldownEnabled = defaults.object(forKey: "cooldownEnabled") as? Bool ?? false
+        os_unfair_lock_lock(&enabledLock)
+        cachedCapsLockInputSwitch = defaults.object(forKey: "capsLockInputSwitch") as? Bool ?? false
+        os_unfair_lock_unlock(&enabledLock)
         loadCooldownOverrides()
         refreshCache()
 
@@ -472,6 +476,29 @@ final class GestureConfig: ObservableObject {
             UserDefaults.standard.set(newValue, forKey: "hapticEnabled")
             os_unfair_lock_lock(&enabledLock)
             cachedHapticEnabled = newValue
+            os_unfair_lock_unlock(&enabledLock)
+            objectWillChange.send()
+        }
+    }
+
+    // MARK: - Caps Lock Input Source Switch
+
+    /// Cached Caps Lock → input source switch flag.
+    /// Protected by enabledLock for thread-safe reads from EventTap callback.
+    private var cachedCapsLockInputSwitch: Bool = false
+
+    /// When true, Caps Lock key is intercepted and toggles input source instantly (no macOS delay).
+    var capsLockInputSwitch: Bool {
+        get {
+            os_unfair_lock_lock(&enabledLock)
+            let v = cachedCapsLockInputSwitch
+            os_unfair_lock_unlock(&enabledLock)
+            return v
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "capsLockInputSwitch")
+            os_unfair_lock_lock(&enabledLock)
+            cachedCapsLockInputSwitch = newValue
             os_unfair_lock_unlock(&enabledLock)
             objectWillChange.send()
         }

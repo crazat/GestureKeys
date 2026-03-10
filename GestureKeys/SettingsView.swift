@@ -175,6 +175,29 @@ struct SettingsView: View {
 
                 HStack(spacing: 12) {
                     Toggle("", isOn: Binding(
+                        get: { config.capsLockInputSwitch },
+                        set: { config.capsLockInputSwitch = $0 }
+                    ))
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Caps Lock → 한영전환")
+                            .font(.body)
+                        Text("Caps Lock 키로 입력 소스를 즉시 전환합니다 (딜레이 없음)")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+
+                Divider().padding(.leading, 44)
+
+                HStack(spacing: 12) {
+                    Toggle("", isOn: Binding(
                         get: { config.cooldownEnabled },
                         set: { config.cooldownEnabled = $0 }
                     ))
@@ -464,7 +487,7 @@ struct SettingsView: View {
             dict["zones.\(info.id).left"] = defaults.object(forKey: "zones.\(info.id).left")
             dict["zones.\(info.id).right"] = defaults.object(forKey: "zones.\(info.id).right")
         }
-        for key in ["hudEnabled", "hapticEnabled", "cooldownEnabled",
+        for key in ["hudEnabled", "hapticEnabled", "cooldownEnabled", "capsLockInputSwitch",
                      "tapSpeedMultiplier", "swipeThresholdMultiplier", "moveThresholdMultiplier",
                      "typingSuppressionEnabled", "typingSuppressionWindow"] {
             dict[key] = defaults.object(forKey: key)

@@ -89,6 +89,22 @@ private func eventTapCallback(
     }
     os_unfair_lock_unlock(&engineLock)
 
+    // Caps Lock → instant input source toggle (before typing suppression)
+    if type == .flagsChanged && event.getIntegerValueField(.keyboardEventKeycode) == 0x39 {
+        if GestureConfig.shared.capsLockInputSwitch {
+            let now = ProcessInfo.processInfo.systemUptime
+            os_unfair_lock_lock(&engineLock)
+            let elapsed = now - engine.lastCapsLockTime
+            engine.lastCapsLockTime = now
+            os_unfair_lock_unlock(&engineLock)
+            // Debounce: only toggle if >50ms since last Caps Lock event
+            if elapsed > 0.05 {
+                KeySynthesizer.postToggleInputSource()
+            }
+            return nil  // Consume Caps Lock event
+        }
+    }
+
     // Track keyboard events for precise typing suppression
     if type == .keyDown || type == .flagsChanged {
         let now = ProcessInfo.processInfo.systemUptime
@@ -298,6 +314,9 @@ final class GestureEngine {
 
     /// True when a typing burst has been detected (extends suppression window).
     fileprivate var typingBurstActive = false
+
+    /// Timestamp of the last Caps Lock toggle (debounce). Protected by engineLock.
+    fileprivate var lastCapsLockTime: TimeInterval = 0
 
     /// Tracks timestamps of consecutive tapDisabledByTimeout events for S3 detection.
     private var tapDisabledTimestamps: [TimeInterval] = []
