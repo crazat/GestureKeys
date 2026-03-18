@@ -286,6 +286,12 @@ final class GestureEngine {
     private var eventTapRetryCount = 0
     private let maxEventTapRetries = 5
 
+    /// Activity token that prevents App Nap from throttling timers and callbacks.
+    /// Without this, macOS suspends menu bar apps (LSUIElement, no visible windows)
+    /// after idle, causing EventTap callbacks to time out and health-check timers
+    /// to stop firing — silently disabling all gestures.
+    private var appNapActivity: NSObjectProtocol?
+
     /// True when Mission Control, Exposé, or Spaces transition is active.
     /// Updated on main thread via workspace notification; read from touch callback.
     private var systemUIActive = false
@@ -330,6 +336,15 @@ final class GestureEngine {
         // Verify MTTouch struct layout matches MultitouchSupport.framework
         _ = MTTouch._sizeCheck
 
+        // Prevent App Nap: macOS aggressively suspends menu bar apps (LSUIElement,
+        // no visible windows) when idle, which throttles Timer firing and delays
+        // EventTap callback processing. This causes tapDisabledByTimeout and
+        // silently kills gesture recognition.
+        appNapActivity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiated, .idleSystemSleepDisabled],
+            reason: "GestureKeys must process trackpad events in real time"
+        )
+
         os_unfair_lock_lock(&engineLock)
         engineInstance = self
         os_unfair_lock_unlock(&engineLock)
@@ -339,6 +354,7 @@ final class GestureEngine {
         startDeviceRecovery()
         startEventTapHealthCheck()
         observeSystemUI()
+        observeScreenLock()
         KeySynthesizer.startObservingInputSourceChanges()
         isRunning = true
 
@@ -349,6 +365,7 @@ final class GestureEngine {
         guard isRunning else { return }
 
         NSWorkspace.shared.notificationCenter.removeObserver(self)
+        DistributedNotificationCenter.default().removeObserver(self)
         deviceRecoveryTimer?.invalidate()
         deviceRecoveryTimer = nil
         eventTapHealthTimer?.invalidate()
@@ -367,6 +384,9 @@ final class GestureEngine {
         deferredDoubleTapCancelled = true
         resetAllRecognizers()
         os_unfair_lock_unlock(&engineLock)
+
+        // Release App Nap prevention
+        appNapActivity = nil
 
         isRunning = false
 
@@ -1006,11 +1026,56 @@ final class GestureEngine {
         }
     }
 
+    // MARK: - Screen Lock / Unlock
+
+    /// Observes screen lock/unlock via DistributedNotificationCenter.
+    /// Screen lock is NOT the same as system sleep — it does not trigger
+    /// willSleepNotification/didWakeNotification, but macOS can still disable
+    /// the EventTap during screen lock. Without this, gestures silently die
+    /// after screen lock/unlock cycles.
+    private func observeScreenLock() {
+        let dnc = DistributedNotificationCenter.default()
+        dnc.addObserver(
+            self, selector: #selector(handleScreenUnlocked),
+            name: NSNotification.Name("com.apple.screenIsUnlocked"),
+            object: nil
+        )
+    }
+
+    @objc private func handleScreenUnlocked(_ notification: Notification) {
+        guard isRunning else { return }
+        NSLog("GestureKeys: Screen unlocked — verifying EventTap and devices")
+
+        // Re-enable or reinstall EventTap (may have been disabled during lock)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            guard let self, self.isRunning else { return }
+
+            os_unfair_lock_lock(&engineLock)
+            let tap = self.eventTap
+            let active = self.eventTapActive
+            os_unfair_lock_unlock(&engineLock)
+
+            if let tap, active {
+                if !CFMachPortIsValid(tap) || !CGEvent.tapIsEnabled(tap: tap) {
+                    NSLog("GestureKeys: EventTap dead after screen unlock — reinstalling")
+                    self.reinstallEventTap()
+                } else {
+                    // Proactively re-enable even if it looks valid
+                    CGEvent.tapEnable(tap: tap, enable: true)
+                }
+            } else if active {
+                // eventTap is nil but should be active
+                self.reinstallEventTap()
+            }
+        }
+    }
+
     // MARK: - EventTap Health Check
 
-    /// Periodically verifies the EventTap is still valid. If the Mach port has
-    /// been invalidated by the system (e.g. after sleep, screen lock, or prolonged
-    /// inactivity), automatically reinstalls the tap without user intervention.
+    /// Periodically verifies the EventTap is still valid and enabled.
+    /// Checks both Mach port validity AND tap enabled state. macOS can disable
+    /// a tap (tapDisabledByTimeout) without invalidating the port — the previous
+    /// check only caught port invalidation, missing the disabled-but-valid case.
     private func startEventTapHealthCheck() {
         eventTapHealthTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
             guard let self, self.isRunning else { return }
@@ -1024,6 +1089,14 @@ final class GestureEngine {
             if !CFMachPortIsValid(tap) {
                 NSLog("GestureKeys: EventTap Mach port invalidated — reinstalling")
                 self.reinstallEventTap()
+            } else if !CGEvent.tapIsEnabled(tap: tap) {
+                NSLog("GestureKeys: EventTap disabled (port valid) — re-enabling")
+                CGEvent.tapEnable(tap: tap, enable: true)
+                // Verify re-enable worked; if not, full reinstall
+                if !CGEvent.tapIsEnabled(tap: tap) {
+                    NSLog("GestureKeys: Re-enable failed — reinstalling")
+                    self.reinstallEventTap()
+                }
             }
         }
     }
