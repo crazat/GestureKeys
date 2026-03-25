@@ -28,10 +28,25 @@ echo "==> Stopping running GestureKeys..."
 pkill -f "GestureKeys.app/Contents/MacOS/GestureKeys" 2>/dev/null || true
 sleep 0.5
 
+# Save old CDHash before replacing (to detect binary change → stale TCC)
+OLD_CDHASH=""
+if [ -f "$INSTALL_PATH/Contents/MacOS/GestureKeys" ]; then
+    OLD_CDHASH=$(codesign -dvvv "$INSTALL_PATH" 2>&1 | grep "CDHash=" | head -1 || true)
+fi
+
 echo "==> Installing to $INSTALL_PATH..."
 mkdir -p "$INSTALL_DIR"
 rm -rf "$INSTALL_PATH"
 cp -R "$BUILD_PATH" "$INSTALL_PATH"
+
+# Compare CDHash — if binary changed, reset stale TCC entry so macOS
+# re-evaluates the code signing requirement on next permission grant.
+# Without this, the old TCC entry may reject the new binary silently.
+NEW_CDHASH=$(codesign -dvvv "$INSTALL_PATH" 2>&1 | grep "CDHash=" | head -1 || true)
+if [ -n "$OLD_CDHASH" ] && [ "$OLD_CDHASH" != "$NEW_CDHASH" ]; then
+    echo "==> Binary changed — resetting accessibility TCC entry"
+    tccutil reset Accessibility com.gesturekeys.app 2>/dev/null || true
+fi
 
 # Remove stale GestureKeys.app copies from DerivedData so macOS Launch Services
 # can't accidentally pick an old build when resolving the bundle ID at login.

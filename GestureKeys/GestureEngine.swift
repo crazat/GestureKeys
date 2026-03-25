@@ -1076,6 +1076,10 @@ final class GestureEngine {
     /// Checks both Mach port validity AND tap enabled state. macOS can disable
     /// a tap (tapDisabledByTimeout) without invalidating the port — the previous
     /// check only caught port invalidation, missing the disabled-but-valid case.
+    ///
+    /// Also handles the boot scenario: if EventTap creation failed during startup
+    /// (system not fully initialized), retries indefinitely every 10 seconds until
+    /// it succeeds — the original 5-retry limit only covers the initial burst.
     private func startEventTapHealthCheck() {
         eventTapHealthTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
             guard let self, self.isRunning else { return }
@@ -1084,16 +1088,26 @@ final class GestureEngine {
             let active = self.eventTapActive
             os_unfair_lock_unlock(&engineLock)
 
-            guard active, let tap = tap else { return }
+            if !active || tap == nil {
+                // EventTap was never created or creation failed (e.g. boot timing).
+                // Keep trying — the system may become ready later.
+                // Reset retry count so installEventTap doesn't immediately bail out.
+                NSLog("GestureKeys: EventTap not active — attempting creation")
+                os_unfair_lock_lock(&engineLock)
+                self.eventTapRetryCount = 0
+                os_unfair_lock_unlock(&engineLock)
+                self.installEventTap()
+                return
+            }
 
-            if !CFMachPortIsValid(tap) {
+            if !CFMachPortIsValid(tap!) {
                 NSLog("GestureKeys: EventTap Mach port invalidated — reinstalling")
                 self.reinstallEventTap()
-            } else if !CGEvent.tapIsEnabled(tap: tap) {
+            } else if !CGEvent.tapIsEnabled(tap: tap!) {
                 NSLog("GestureKeys: EventTap disabled (port valid) — re-enabling")
-                CGEvent.tapEnable(tap: tap, enable: true)
+                CGEvent.tapEnable(tap: tap!, enable: true)
                 // Verify re-enable worked; if not, full reinstall
-                if !CGEvent.tapIsEnabled(tap: tap) {
+                if !CGEvent.tapIsEnabled(tap: tap!) {
                     NSLog("GestureKeys: Re-enable failed — reinstalling")
                     self.reinstallEventTap()
                 }
