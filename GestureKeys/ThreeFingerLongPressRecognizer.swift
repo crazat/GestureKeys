@@ -1,6 +1,6 @@
 import Foundation
 
-/// Recognizes three-finger long press (500ms+) → Cmd+Z (undo).
+/// Recognizes three-finger long press (500ms+) → copy (Cmd+C).
 ///
 /// Fires once when the hold duration is reached while fingers are still down.
 /// Enters cooldown until all fingers lift to prevent repeated firing.
@@ -8,7 +8,7 @@ import Foundation
 /// State machine:
 /// ```
 /// [Idle] → 3 active touches → [ThreeDown] (record time + positions)
-/// [ThreeDown] → held 500ms without movement → fire Cmd+Z → [Fired]
+/// [ThreeDown] → held 500ms without movement → fire → [Fired]
 /// [ThreeDown] → movement or count != 3 → [Idle]
 /// [Fired] → all fingers lift → [Idle]
 /// ```

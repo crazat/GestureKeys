@@ -260,6 +260,8 @@ final class XxxRecognizer {
   - **동기 실행**: EventTap 콜백에서 동기 실행하여 전환 완료 전에 다음 키 이벤트가 처리되지 않도록 보장 (영→한 첫 글자 race 방지). 캐시 히트 시 ~6-25ms.
   - **실패 복구**: `TISSelectInputSource` 실패 시 캐시 무효화 + 1회 재시도. 엔진 stop 시 캐시 정리 (`invalidateInputSourceCache()`).
 - **한영전환 액션**: `KeySynthesizer.Action.toggleInputSource` — 어떤 제스처든 한영전환에 매핑 가능
+- **햅틱 피드백 설정 체크**: 앱 시작 시 `com.apple.AppleMultitouchTrackpad` → `ActuateDetents` 값 확인. 0이면 시스템 트랙패드 설정에서 "세게 클릭 및 햅틱 피드백"이 꺼져 있다는 경고 표시. macOS 재시작/업데이트 후 이 설정이 초기화되는 경우가 있어 `NSHapticFeedbackManager`가 무음 실패함.
+- **접근성 권한 무효화 감지**: `wasAccessibilityGranted` UserDefaults 플래그로 이전에 권한이 부여됐는지 추적. 재빌드/업데이트로 바이너리 해시가 변경되면 TCC가 권한을 무효화하는데, 이때 "끄고 → 다시 켜주세요" 안내 표시. `install.sh`에서 CDHash 비교 후 변경 시 `tccutil reset` 자동 실행.
 
 ## 성능 & 안정성 원칙
 
@@ -304,6 +306,11 @@ WindowServer 시스템 레벨 단축키라 CGEvent.post 불가. osascript + Syst
 
 ### 재빌드 후 접근성 권한
 Apple Development 인증서로 서명하므로 재빌드해도 접근성 권한이 유지됨. 인증서가 만료/변경된 경우에만 시스템 설정에서 재허용 필요.
+**자동 감지**: `wasAccessibilityGranted` 플래그로 이전 권한 부여 이력을 추적. 권한이 무효화되면 "끄고 → 다시 켜주세요" 안내 표시. `install.sh`에서 CDHash 비교 후 변경 시 `tccutil reset` 자동 실행.
+
+### 재시작 후 햅틱 피드백 사라짐
+macOS 재시작 또는 업데이트 후 시스템 트랙패드 설정의 "세게 클릭 및 햅틱 피드백"(`ActuateDetents`)이 초기화되는 경우가 있음. 이 설정이 꺼지면 `NSHapticFeedbackManager.defaultPerformer.perform()`이 무음 실패하여 제스처 햅틱 피드백이 작동하지 않음 (제스처 액션 자체는 정상 동작).
+**자동 감지**: 앱 시작 시 `com.apple.AppleMultitouchTrackpad` → `ActuateDetents` 값을 확인하고, 0이면 경고 알림을 표시하여 트랙패드 설정으로 안내.
 
 ### Force Touch 클릭 (3FC/4FC/5FC)
 3FC/4FC/5FC의 "세게 클릭"은 Force Touch 압력 감지로 발동. 클릭 후 150ms 안정화 구간에서 기준 압력(basePressure)을 기록하고, 이후 압력이 basePressure × 1.5를 초과하면 Force Touch로 판정. 2초 안전 타임아웃: 3FC/4FC는 일반 클릭 발동, 5FC는 아무 동작 없이 취소 (안전 장치). clickHeld 상태일 때 해당 long press recognizer의 `processTouches` 호출을 건너뜀 (3FLP, 4FLP). **참고**: 2손가락 Force Touch는 시스템 우클릭(`.rightMouseDown`)과 충돌하여 구현 불가.

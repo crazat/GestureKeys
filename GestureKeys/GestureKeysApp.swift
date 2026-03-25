@@ -10,6 +10,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Strong reference to prevent ARC deallocation (NSApp.delegate is weak)
     private static var keepAlive: AppDelegate?
 
+    /// UserDefaults key tracking whether accessibility was previously granted.
+    /// Used to detect stale permission after rebuild/update.
+    private static let wasAccessibilityGrantedKey = "wasAccessibilityGranted"
+
     static func main() {
         let app = NSApplication.shared
         let delegate = AppDelegate()
@@ -70,12 +74,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        let trusted = AXIsProcessTrusted()
+        // Use AXIsProcessTrustedWithOptions to trigger the system prompt
+        // if accessibility is not yet granted.
+        let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        let trusted = AXIsProcessTrustedWithOptions(opts)
         NSLog("GestureKeys: AXIsProcessTrusted = %d", trusted ? 1 : 0)
         if trusted {
+            UserDefaults.standard.set(true, forKey: Self.wasAccessibilityGrantedKey)
             engine.start()
+            checkHapticFeedbackSetting()
         } else {
-            showAccessibilityAlert()
+            let wasGranted = UserDefaults.standard.bool(forKey: Self.wasAccessibilityGrantedKey)
+            if wasGranted {
+                // Permission was previously granted but now revoked — likely a rebuild/update
+                showStalePermissionAlert()
+            }
+            // System prompt already triggered by AXIsProcessTrustedWithOptions above
             startAccessibilityPolling()
         }
     }
@@ -97,7 +111,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 timer.invalidate()
                 self?.accessibilityTimer = nil
                 NSLog("GestureKeys: Accessibility permission granted")
+                UserDefaults.standard.set(true, forKey: AppDelegate.wasAccessibilityGrantedKey)
                 self?.engine.start()
+                self?.menuBarController?.updateIcon(state: .active)
             }
         }
     }
@@ -116,9 +132,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let response = alert.runModal()
         if response == .alertFirstButtonReturn {
-            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-                NSWorkspace.shared.open(url)
-            }
+            Self.openAccessibilitySettings()
         }
     }
 
@@ -136,9 +150,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let response = alert.runModal()
         if response == .alertFirstButtonReturn {
-            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-                NSWorkspace.shared.open(url)
-            }
+            Self.openAccessibilitySettings()
         }
     }
 
@@ -153,7 +165,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.runModal()
     }
 
+    /// First-time accessibility request — user has never granted permission.
     private func showAccessibilityAlert() {
+        menuBarController?.updateIcon(state: .noPermission)
+
         let alert = NSAlert()
         alert.messageText = "접근성 권한이 필요합니다"
         alert.informativeText = "GestureKeys가 트랙패드 제스처를 인식하려면 접근성 권한이 필요합니다.\n시스템 설정에서 GestureKeys를 허용해주세요."
@@ -163,9 +178,81 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let response = alert.runModal()
         if response == .alertFirstButtonReturn {
-            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-                NSWorkspace.shared.open(url)
+            Self.openAccessibilitySettings()
+        }
+    }
+
+    /// Stale permission — was previously granted but revoked (rebuild/update changed binary hash).
+    /// Shows a specific alert telling the user to toggle off → on, not just "allow".
+    private func showStalePermissionAlert() {
+        NSLog("GestureKeys: Stale accessibility permission detected (was granted before)")
+        menuBarController?.updateIcon(state: .noPermission)
+
+        let alert = NSAlert()
+        alert.messageText = "접근성 권한 재설정이 필요합니다"
+        alert.informativeText = """
+            앱이 업데이트되어 기존 접근성 권한이 무효화되었습니다.
+
+            시스템 설정 → 손쉬운 사용에서:
+            1. GestureKeys를 끄고
+            2. 다시 켜주세요
+
+            권한이 복원되면 자동으로 시작됩니다.
+            """
+        alert.alertStyle = .critical
+        alert.addButton(withTitle: "시스템 설정 열기")
+        alert.addButton(withTitle: "나중에")
+
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            Self.openAccessibilitySettings()
+        }
+    }
+
+    // MARK: - Haptic Feedback Check
+
+    /// Checks if macOS trackpad "Force Click and haptic feedback" is enabled.
+    /// When disabled (ActuateDetents=0), NSHapticFeedbackManager produces no output.
+    /// This setting can get reset after system restart or macOS updates.
+    private func checkHapticFeedbackSetting() {
+        let hapticEnabled = GestureConfig.shared.feedbackSnapshot.hapticEnabled
+        guard hapticEnabled else { return }  // user disabled haptic in GestureKeys — no need to check
+
+        let actuateDetents = UserDefaults(suiteName: "com.apple.AppleMultitouchTrackpad")?.object(forKey: "ActuateDetents") as? Int
+        if actuateDetents == 0 {
+            NSLog("GestureKeys: ActuateDetents=0 — haptic feedback will not work")
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.messageText = "햅틱 피드백이 비활성화되어 있습니다"
+                alert.informativeText = """
+                    시스템 설정 → 트랙패드에서 "세게 클릭 및 햅틱 피드백"이 꺼져 있습니다.
+                    이 설정이 꺼져 있으면 제스처 햅틱 피드백이 작동하지 않습니다.
+
+                    시스템 재시작 후 이 설정이 초기화되는 경우가 있습니다.
+                    """
+                alert.alertStyle = .informational
+                alert.addButton(withTitle: "트랙패드 설정 열기")
+                alert.addButton(withTitle: "무시")
+
+                let response = alert.runModal()
+                if response == .alertFirstButtonReturn {
+                    Self.openTrackpadSettings()
+                }
             }
+        }
+    }
+
+    /// Opens System Settings to the Accessibility privacy pane.
+    private static func openAccessibilitySettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    /// Opens System Settings to the Trackpad pane.
+    private static func openTrackpadSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.Trackpad-Settings.extension") {
+            NSWorkspace.shared.open(url)
         }
     }
 }
