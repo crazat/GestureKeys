@@ -82,6 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if trusted {
             UserDefaults.standard.set(true, forKey: Self.wasAccessibilityGrantedKey)
             engine.start()
+            checkHapticFeedbackSetting()
         } else {
             let wasGranted = UserDefaults.standard.bool(forKey: Self.wasAccessibilityGrantedKey)
             if wasGranted {
@@ -208,9 +209,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // MARK: - Haptic Feedback Check
+
+    /// Checks if macOS trackpad "Force Click and haptic feedback" is enabled.
+    /// When disabled (ActuateDetents=0), NSHapticFeedbackManager produces no output.
+    /// This setting can get reset after system restart or macOS updates.
+    private func checkHapticFeedbackSetting() {
+        let hapticEnabled = GestureConfig.shared.feedbackSnapshot.hapticEnabled
+        guard hapticEnabled else { return }  // user disabled haptic in GestureKeys — no need to check
+
+        let actuateDetents = UserDefaults(suiteName: "com.apple.AppleMultitouchTrackpad")?.object(forKey: "ActuateDetents") as? Int
+        if actuateDetents == 0 {
+            NSLog("GestureKeys: ActuateDetents=0 — haptic feedback will not work")
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.messageText = "햅틱 피드백이 비활성화되어 있습니다"
+                alert.informativeText = """
+                    시스템 설정 → 트랙패드에서 "세게 클릭 및 햅틱 피드백"이 꺼져 있습니다.
+                    이 설정이 꺼져 있으면 제스처 햅틱 피드백이 작동하지 않습니다.
+
+                    시스템 재시작 후 이 설정이 초기화되는 경우가 있습니다.
+                    """
+                alert.alertStyle = .informational
+                alert.addButton(withTitle: "트랙패드 설정 열기")
+                alert.addButton(withTitle: "무시")
+
+                let response = alert.runModal()
+                if response == .alertFirstButtonReturn {
+                    Self.openTrackpadSettings()
+                }
+            }
+        }
+    }
+
     /// Opens System Settings to the Accessibility privacy pane.
     private static func openAccessibilitySettings() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    /// Opens System Settings to the Trackpad pane.
+    private static func openTrackpadSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.Trackpad-Settings.extension") {
             NSWorkspace.shared.open(url)
         }
     }
