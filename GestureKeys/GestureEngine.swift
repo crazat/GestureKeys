@@ -19,11 +19,15 @@ private func touchCallback(
     frame: Int32
 ) {
     os_unfair_lock_lock(&engineLock)
-    let engine = engineInstance
+    guard let engine = engineInstance, engine.acceptsCallbacks else {
+        os_unfair_lock_unlock(&engineLock)
+        return
+    }
+    engine.lastTouchCallbackTime = timestamp
     os_unfair_lock_unlock(&engineLock)
 
     let touches = rawTouches.assumingMemoryBound(to: MTTouch.self)
-    engine?.processTouches(touches, count: Int(touchCount), timestamp: timestamp)
+    engine.processTouches(touches, count: Int(touchCount), timestamp: timestamp)
 }
 
 // MARK: - NX_SYSDEFINED Constants
@@ -52,12 +56,20 @@ private func eventTapCallback(
     // Handle tap being disabled by the system.
     if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
         os_unfair_lock_lock(&engineLock)
-        let engine = engineInstance
+        let engine = engineInstance?.acceptsCallbacks == true ? engineInstance : nil
         os_unfair_lock_unlock(&engineLock)
         engine?.reEnableEventTap()
         engine?.trackTapDisabled()
         return Unmanaged.passUnretained(event)
     }
+
+    // Safe engine reference via engineLock (avoids use-after-free during shutdown)
+    os_unfair_lock_lock(&engineLock)
+    guard let engine = engineInstance, engine.acceptsCallbacks else {
+        os_unfair_lock_unlock(&engineLock)
+        return Unmanaged.passUnretained(event)
+    }
+    os_unfair_lock_unlock(&engineLock)
 
     // Shift + brightness key → keyboard backlight (no lock needed)
     if type.rawValue == kNXEventTypeSysDefined {
@@ -81,25 +93,23 @@ private func eventTapCallback(
         return Unmanaged.passUnretained(event)
     }
 
-    // Safe engine reference via engineLock (avoids use-after-free during shutdown)
-    os_unfair_lock_lock(&engineLock)
-    guard let engine = engineInstance else {
-        os_unfair_lock_unlock(&engineLock)
-        return Unmanaged.passUnretained(event)
-    }
-    os_unfair_lock_unlock(&engineLock)
-
     // Caps Lock → instant input source toggle (before typing suppression)
     if type == .flagsChanged && event.getIntegerValueField(.keyboardEventKeycode) == 0x39 {
         if GestureConfig.shared.capsLockInputSwitch {
-            let now = ProcessInfo.processInfo.systemUptime
+            // Detect flag STATE TRANSITION instead of time-based debounce.
+            // Caps Lock is a toggle modifier: pressing it changes .maskAlphaShift,
+            // but releasing does NOT change it. By only toggling on transitions,
+            // we naturally ignore key-up events regardless of hold duration.
+            let capsLockOn = event.flags.contains(.maskAlphaShift)
             os_unfair_lock_lock(&engineLock)
-            let elapsed = now - engine.lastCapsLockTime
-            engine.lastCapsLockTime = now
+            let lastState = engine.lastCapsLockFlagState
             os_unfair_lock_unlock(&engineLock)
-            // Debounce: only toggle if >50ms since last Caps Lock event
-            if elapsed > 0.05 {
-                KeySynthesizer.postToggleInputSource()
+
+            if lastState == nil || capsLockOn != lastState {
+                let didSwitch = KeySynthesizer.postToggleInputSource()
+                os_unfair_lock_lock(&engineLock)
+                engine.lastCapsLockFlagState = didSwitch ? capsLockOn : nil
+                os_unfair_lock_unlock(&engineLock)
             }
             return nil  // Consume Caps Lock event
         }
@@ -245,8 +255,25 @@ final class GestureEngine {
     /// Posted when no multitouch devices are found at startup.
     static let noDevicesNotification = Notification.Name("GestureKeysNoDevices")
 
+    /// Posted when the EventTap has been successfully restored after a failure.
+    static let eventTapRestoredNotification = Notification.Name("GestureKeysEventTapRestored")
+
     /// When true, gestures are recognized but not executed (test mode).
-    static var monitorMode = false
+    private static var monitorModeStorage = false
+    private static var monitorModeLock = os_unfair_lock()
+    static var monitorMode: Bool {
+        get {
+            os_unfair_lock_lock(&monitorModeLock)
+            let value = monitorModeStorage
+            os_unfair_lock_unlock(&monitorModeLock)
+            return value
+        }
+        set {
+            os_unfair_lock_lock(&monitorModeLock)
+            monitorModeStorage = newValue
+            os_unfair_lock_unlock(&monitorModeLock)
+        }
+    }
 
     /// True if CGEventTap was successfully installed.
     private(set) var eventTapActive = false
@@ -280,6 +307,7 @@ final class GestureEngine {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var isRunning = false
+    fileprivate var acceptsCallbacks = false
     private var deviceRecoveryTimer: Timer?
     private var eventTapHealthTimer: Timer?
     private var eventTapRetryTimer: Timer?
@@ -321,17 +349,31 @@ final class GestureEngine {
     /// True when a typing burst has been detected (extends suppression window).
     fileprivate var typingBurstActive = false
 
-    /// Timestamp of the last Caps Lock toggle (debounce). Protected by engineLock.
-    fileprivate var lastCapsLockTime: TimeInterval = 0
+    /// Last observed Caps Lock flag state (nil = not yet observed). Protected by engineLock.
+    /// Used to detect flag TRANSITIONS rather than time-based debounce.
+    /// Key insight: Caps Lock is a toggle modifier — pressing it changes the
+    /// `.maskAlphaShift` flag, but releasing does NOT change it. By only toggling
+    /// input source on flag transitions, we naturally ignore key-up events
+    /// regardless of how long the user holds the key.
+    fileprivate var lastCapsLockFlagState: Bool?
 
     /// Tracks timestamps of consecutive tapDisabledByTimeout events for S3 detection.
     private var tapDisabledTimestamps: [TimeInterval] = []
+
+    /// Timestamp of the last successful EventTap reinstall (cooldown dedup).
+    private var lastReinstallTime: TimeInterval = 0
+
+    /// Timestamp of the last multitouch callback invocation. Protected by engineLock.
+    /// Used by device recovery to detect silent callback death (device handle stale
+    /// but count unchanged, or MultitouchSupport internal thread died).
+    fileprivate var lastTouchCallbackTime: TimeInterval = 0
 
     /// Prevents duplicate permission issue alerts.
     private var permissionIssuePosted = false
 
     func start() {
         guard !isRunning else { return }
+        isRunning = true
 
         // Verify MTTouch struct layout matches MultitouchSupport.framework
         _ = MTTouch._sizeCheck
@@ -347,6 +389,7 @@ final class GestureEngine {
 
         os_unfair_lock_lock(&engineLock)
         engineInstance = self
+        acceptsCallbacks = true
         os_unfair_lock_unlock(&engineLock)
 
         startMultitouchDevices()
@@ -356,13 +399,19 @@ final class GestureEngine {
         observeSystemUI()
         observeScreenLock()
         KeySynthesizer.startObservingInputSourceChanges()
-        isRunning = true
+        KeySynthesizer.prewarmInputSourceCache()
 
         NSLog("GestureKeys: Engine started with %d device(s)", devices.count)
     }
 
     func stop() {
         guard isRunning else { return }
+        isRunning = false
+
+        os_unfair_lock_lock(&engineLock)
+        acceptsCallbacks = false
+        engineInstance = nil
+        os_unfair_lock_unlock(&engineLock)
 
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         DistributedNotificationCenter.default().removeObserver(self)
@@ -382,13 +431,15 @@ final class GestureEngine {
         deferredDoubleTapItem?.cancel()
         deferredDoubleTapItem = nil
         deferredDoubleTapCancelled = true
+        lastCapsLockFlagState = nil
+        eventTapRetryCount = 0
+        wasHighFingerFired = false
+        MacroEngine.shared.reset()
         resetAllRecognizers()
         os_unfair_lock_unlock(&engineLock)
 
         // Release App Nap prevention
         appNapActivity = nil
-
-        isRunning = false
 
         NSLog("GestureKeys: Engine stopped")
     }
@@ -445,6 +496,18 @@ final class GestureEngine {
     /// Called when repeated re-enable attempts fail (stale permission after reboot/rebuild).
     /// Thread-safe: reads eventTapActive under engineLock after reinstall.
     private func reinstallEventTap() {
+        // Cooldown: skip if reinstalled within the last 3 seconds.
+        // Multiple async paths (handleWake +2s, handleScreenUnlocked +1s,
+        // healthCheck 5s) can all trigger reinstall within a short window.
+        // Without dedup, each reinstall tears down the working EventTap
+        // and recreates it, causing brief gesture-dead gaps.
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - lastReinstallTime < 3.0 {
+            NSLog("GestureKeys: Skipping EventTap reinstall — cooldown active (%.1fs ago)", now - lastReinstallTime)
+            return
+        }
+        lastReinstallTime = now
+
         NSLog("GestureKeys: Attempting EventTap reinstall...")
         removeEventTap()
         installEventTap()
@@ -455,6 +518,9 @@ final class GestureEngine {
 
         if active {
             NSLog("GestureKeys: EventTap reinstall succeeded")
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: Self.eventTapRestoredNotification, object: nil)
+            }
         } else {
             NSLog("GestureKeys: EventTap reinstall failed — falling back to notification")
         }
@@ -496,13 +562,11 @@ final class GestureEngine {
     // MARK: - Touch Processing
 
     func processTouches(_ touchPtr: UnsafeMutablePointer<MTTouch>, count: Int, timestamp: Double) {
+        guard count > 0 else { return }
         // Single-pass filter from raw buffer (1 allocation instead of 2)
         let activeTouches = UnsafeBufferPointer(start: touchPtr, count: count).filter { $0.touchState.isActive }
         let activeCount = activeTouches.count
 
-        // Note: monitorMode is read without engineLock intentionally.
-        // Bool read/write is atomic on ARM64. Worst case: 1-2 frames of
-        // data missed during monitor mode transition — functionally harmless.
         if Self.monitorMode {
             GestureMonitor.shared.updateTouchCount(activeCount)
             GestureMonitor.shared.logTouchSizes(activeTouches)
@@ -515,6 +579,10 @@ final class GestureEngine {
         var deferDelay: TimeInterval = 0.4
 
         os_unfair_lock_lock(&engineLock)
+        guard acceptsCallbacks else {
+            os_unfair_lock_unlock(&engineLock)
+            return
+        }
 
         currentTouchCount = activeCount
 
@@ -819,7 +887,23 @@ final class GestureEngine {
     // MARK: - Multitouch Device Management
 
     private func startMultitouchDevices() {
-        let rawList = MTDeviceCreateList()
+        // Defensively unregister any existing callbacks to prevent double-registration.
+        // This guards against overlapping async paths (e.g., handleWake + deviceRecoveryTimer
+        // both scheduling startMultitouchDevices within a short window).
+        if !devices.isEmpty {
+            for device in devices {
+                MTUnregisterContactFrameCallback(device, touchCallback)
+            }
+            devices.removeAll()
+        }
+
+        guard let rawList = MTDeviceCreateList() else {
+            NSLog("GestureKeys: MTDeviceCreateList returned nil")
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: Self.noDevicesNotification, object: nil)
+            }
+            return
+        }
         let count = CFArrayGetCount(rawList)
 
         if count == 0 {
@@ -847,7 +931,7 @@ final class GestureEngine {
     private func stopMultitouchDevices() {
         for device in devices {
             MTUnregisterContactFrameCallback(device, touchCallback)
-            MTDeviceStop(device)
+            _ = MTDeviceStop(device)
         }
         devices.removeAll()
     }
@@ -1077,14 +1161,29 @@ final class GestureEngine {
     /// a tap (tapDisabledByTimeout) without invalidating the port — the previous
     /// check only caught port invalidation, missing the disabled-but-valid case.
     private func startEventTapHealthCheck() {
-        eventTapHealthTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
+        eventTapHealthTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
             guard let self, self.isRunning else { return }
             os_unfair_lock_lock(&engineLock)
             let tap = self.eventTap
             let active = self.eventTapActive
             os_unfair_lock_unlock(&engineLock)
 
-            guard active, let tap = tap else { return }
+            guard active, let tap = tap else {
+                // If EventTap is not active and permission was previously reported as
+                // lost, check if accessibility permission has been restored. If so,
+                // attempt automatic recovery without requiring manual toggle.
+                os_unfair_lock_lock(&engineLock)
+                let wasPermissionIssue = self.permissionIssuePosted
+                os_unfair_lock_unlock(&engineLock)
+                if wasPermissionIssue && AXIsProcessTrusted() {
+                    NSLog("GestureKeys: Accessibility permission restored — attempting auto-recovery")
+                    os_unfair_lock_lock(&engineLock)
+                    self.permissionIssuePosted = false
+                    os_unfair_lock_unlock(&engineLock)
+                    self.reinstallEventTap()
+                }
+                return
+            }
 
             if !CFMachPortIsValid(tap) {
                 NSLog("GestureKeys: EventTap Mach port invalidated — reinstalling")
@@ -1106,11 +1205,16 @@ final class GestureEngine {
     private func startDeviceRecovery() {
         deviceRecoveryTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
             guard let self, self.isRunning else { return }
-            // MTDeviceCreateList() returns a CFArray. In Swift, it's automatically
+            // MTDeviceCreateList() returns a CFArray?. In Swift, it's automatically
             // managed via toll-free bridging. The local binding ensures ARC releases
             // it when this closure scope exits.
-            let rawList = MTDeviceCreateList()
+            guard let rawList = MTDeviceCreateList() else { return }
             let currentCount = CFArrayGetCount(rawList)
+
+            // Note: OpaquePointer comparison is unreliable here — MTDeviceCreateList()
+            // may return new wrapper objects for the same physical device each call.
+            // Only use device count changes as the trigger for re-registration.
+
             if currentCount != self.devices.count {
                 NSLog("GestureKeys: Device count changed (%d → %ld), re-registering", self.devices.count, currentCount)
                 os_unfair_lock_lock(&engineLock)

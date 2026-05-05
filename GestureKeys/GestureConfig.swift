@@ -50,11 +50,11 @@ final class GestureConfig: ObservableObject {
             Info(id: "threeFingerClick",      name: "세 손가락 클릭",             action: "탭 닫기 (⌘W)",               defaultEnabled: true,
                  howTo: "세 손가락을 트랙패드에 올린 뒤, 물리적으로 트랙패드를 꾹 눌러 클릭하세요."),
             Info(id: "threeFingerLongClick",  name: "세 손가락 세게 클릭",         action: "앱 종료 (⌘Q)",               defaultEnabled: false,
-                 howTo: "세 손가락을 트랙패드에 올린 뒤 세게 눌러 클릭하세요 (Force Touch). 바로 떼면 탭 닫기입니다."),
+                 howTo: "세 손가락을 트랙패드에 올린 뒤 세게 눌러 클릭하세요 (Force Touch 트랙패드 필요). 바로 떼면 탭 닫기입니다."),
             Info(id: "fourFingerClick",       name: "네 손가락 클릭",             action: "전체화면 토글 (⌃⌘F)",        defaultEnabled: true,
                  howTo: "네 손가락을 트랙패드에 올린 뒤, 물리적으로 트랙패드를 꾹 눌러 클릭하세요."),
             Info(id: "fourFingerLongClick",  name: "네 손가락 세게 클릭",         action: "앱 숨기기 (⌘H)",            defaultEnabled: false,
-                 howTo: "네 손가락을 트랙패드에 올린 뒤 세게 눌러 클릭하세요 (Force Touch). 바로 떼면 전체화면 토글입니다."),
+                 howTo: "네 손가락을 트랙패드에 올린 뒤 세게 눌러 클릭하세요 (Force Touch 트랙패드 필요). 바로 떼면 전체화면 토글입니다."),
             Info(id: "swhUp",               name: "홀드 + 스와이프 ↑",          action: "새 창 (⌘N)",                defaultEnabled: true,
                  howTo: "두 손가락을 트랙패드에 올려 유지한 뒤, 왼쪽의 세 번째 손가락으로 위로 밀어주세요."),
             Info(id: "swhDown",             name: "홀드 + 스와이프 ↓",          action: "최소화 (⌘M)",               defaultEnabled: true,
@@ -244,11 +244,20 @@ final class GestureConfig: ObservableObject {
         cachedCapsLockInputSwitch = UserDefaults.standard.object(forKey: "capsLockInputSwitch") as? Bool ?? false
         loadCooldownOverrides()
 
+        loadMacros()
+
         // Pre-populate app overrides cache to avoid first-access allocation under lock
         if let dict = UserDefaults.standard.dictionary(forKey: "appOverrides") as? [String: [String]] {
             cachedAppOverrides = dict.mapValues { Set($0) }
         } else {
             cachedAppOverrides = [:]
+        }
+        if let dict = UserDefaults.standard.dictionary(forKey: "appActionOverrides") as? [String: [String: String]] {
+            cachedAppActionOverrides = dict.mapValues { gestureMap in
+                gestureMap.compactMapValues { KeySynthesizer.Action(rawValue: $0) }
+            }
+        } else {
+            cachedAppActionOverrides = [:]
         }
     }
 
@@ -310,43 +319,57 @@ final class GestureConfig: ObservableObject {
     /// Must be called on the main thread.
     func reloadFromDefaults() {
         let defaults = UserDefaults.standard
-        os_unfair_lock_lock(&enabledLock)
+        // Read all UserDefaults OUTSIDE the lock to avoid blocking touch callbacks.
+        var newStates: [String: Bool] = [:]
+        var newActions: [String: KeySynthesizer.Action] = [:]
         for info in Self.all {
             let key = "gesture.\(info.id)"
-            let value: Bool
             if let stored = defaults.object(forKey: key) as? Bool {
-                value = stored
+                newStates[info.id] = stored
             } else {
-                value = info.defaultEnabled
+                newStates[info.id] = info.defaultEnabled
             }
-            states[info.id] = value
-            enabledCache[info.id] = value
-
             if let raw = defaults.string(forKey: "action.\(info.id)"),
                let action = KeySynthesizer.Action(rawValue: raw) {
-                actionCache[info.id] = action
+                newActions[info.id] = action
             } else {
-                actionCache[info.id] = KeySynthesizer.defaultActions[info.id]
+                newActions[info.id] = KeySynthesizer.defaultActions[info.id]
             }
+        }
+        // Apply to caches under lock (fast, no I/O)
+        os_unfair_lock_lock(&enabledLock)
+        for (id, value) in newStates {
+            states[id] = value
+            enabledCache[id] = value
+        }
+        for (id, action) in newActions {
+            actionCache[id] = action
         }
         os_unfair_lock_unlock(&enabledLock)
 
-        cachedHudEnabled = defaults.object(forKey: "hudEnabled") as? Bool ?? false
-        cachedHapticEnabled = defaults.object(forKey: "hapticEnabled") as? Bool ?? true
-        cachedCooldownEnabled = defaults.object(forKey: "cooldownEnabled") as? Bool ?? false
+        // Read values outside lock, then write under lock (consistent with individual setters)
+        let hudVal = defaults.object(forKey: "hudEnabled") as? Bool ?? false
+        let hapticVal = defaults.object(forKey: "hapticEnabled") as? Bool ?? true
+        let cooldownVal = defaults.object(forKey: "cooldownEnabled") as? Bool ?? false
+        let capsLockVal = defaults.object(forKey: "capsLockInputSwitch") as? Bool ?? false
         os_unfair_lock_lock(&enabledLock)
-        cachedCapsLockInputSwitch = defaults.object(forKey: "capsLockInputSwitch") as? Bool ?? false
+        cachedHudEnabled = hudVal
+        cachedHapticEnabled = hapticVal
+        cachedCooldownEnabled = cooldownVal
+        cachedCapsLockInputSwitch = capsLockVal
         os_unfair_lock_unlock(&enabledLock)
         loadCooldownOverrides()
         refreshCache()
+        loadMacros()
 
-        // Reload app overrides
+        // Reload app overrides (read outside lock, apply under lock)
+        let disableDict = defaults.dictionary(forKey: "appOverrides") as? [String: [String]]
+        let actionDict = defaults.dictionary(forKey: "appActionOverrides") as? [String: [String: String]]
         os_unfair_lock_lock(&appOverridesLock)
-        if let dict = defaults.dictionary(forKey: "appOverrides") as? [String: [String]] {
-            cachedAppOverrides = dict.mapValues { Set($0) }
-        } else {
-            cachedAppOverrides = [:]
-        }
+        cachedAppOverrides = disableDict.map { $0.mapValues { Set($0) } } ?? [:]
+        cachedAppActionOverrides = actionDict.map { $0.mapValues { map in
+            map.compactMapValues { KeySynthesizer.Action(rawValue: $0) }
+        }} ?? [:]
         os_unfair_lock_unlock(&appOverridesLock)
 
         objectWillChange.send()
@@ -437,10 +460,75 @@ final class GestureConfig: ObservableObject {
         appOverrides = overrides
     }
 
+    // MARK: - Per-App Action Overrides
+
+    /// bundleId → gestureId → remapped action. Stored as `[String: [String: String]]` in UserDefaults.
+    /// Separate from appOverrides (disable) — this is for action remapping.
+    var appActionOverrides: [String: [String: KeySynthesizer.Action]] {
+        get {
+            guard let dict = UserDefaults.standard.dictionary(forKey: "appActionOverrides") as? [String: [String: String]] else {
+                return [:]
+            }
+            return dict.mapValues { gestureMap in
+                gestureMap.compactMapValues { KeySynthesizer.Action(rawValue: $0) }
+            }
+        }
+        set {
+            let dict = newValue.mapValues { gestureMap in
+                gestureMap.mapValues { $0.rawValue }
+            }
+            UserDefaults.standard.set(dict, forKey: "appActionOverrides")
+            // Update cached snapshot
+            os_unfair_lock_lock(&appOverridesLock)
+            cachedAppActionOverrides = newValue
+            os_unfair_lock_unlock(&appOverridesLock)
+            objectWillChange.send()
+        }
+    }
+
+    /// Cached per-app action overrides.
+    private var cachedAppActionOverrides: [String: [String: KeySynthesizer.Action]]?
+
+    /// Per-frame snapshot of current app's action overrides (set in updateFrameSnapshot).
+    private(set) var frameAppActionOverrides: [String: KeySynthesizer.Action]?
+
+    /// Returns the action for a gesture, respecting per-app action overrides.
+    /// Falls back to global action if no per-app override exists.
+    func appAwareActionFor(_ gestureId: String) -> KeySynthesizer.Action {
+        if let appAction = frameAppActionOverrides?[gestureId] {
+            return appAction
+        }
+        return actionFor(gestureId)
+    }
+
+    func appActionOverride(for gestureId: String, bundleId: String) -> KeySynthesizer.Action? {
+        appActionOverrides[bundleId]?[gestureId]
+    }
+
+    func setAppActionOverride(for gestureId: String, bundleId: String, action: KeySynthesizer.Action?) {
+        var overrides = appActionOverrides
+        var gestureMap = overrides[bundleId] ?? [:]
+        if let action {
+            gestureMap[gestureId] = action
+        } else {
+            gestureMap.removeValue(forKey: gestureId)
+        }
+        if gestureMap.isEmpty {
+            overrides.removeValue(forKey: bundleId)
+        } else {
+            overrides[bundleId] = gestureMap
+        }
+        appActionOverrides = overrides
+    }
+
     func removeAppOverride(bundleId: String) {
         var overrides = appOverrides
         overrides.removeValue(forKey: bundleId)
         appOverrides = overrides
+        // Also remove action overrides for this app
+        var actionOverrides = appActionOverrides
+        actionOverrides.removeValue(forKey: bundleId)
+        appActionOverrides = actionOverrides
     }
 
     // MARK: - HUD & Haptic
@@ -502,6 +590,43 @@ final class GestureConfig: ObservableObject {
             os_unfair_lock_unlock(&enabledLock)
             objectWillChange.send()
         }
+    }
+
+    // MARK: - Macros
+
+    @Published private(set) var macros: [MacroDefinition] = []
+
+    private func loadMacros() {
+        guard let data = UserDefaults.standard.data(forKey: "macros"),
+              let decoded = try? JSONDecoder().decode([MacroDefinition].self, from: data) else {
+            macros = []
+            MacroEngine.shared.updateMacros([])
+            return
+        }
+        macros = decoded
+        MacroEngine.shared.updateMacros(decoded)
+    }
+
+    func saveMacros(_ list: [MacroDefinition]) {
+        macros = list
+        guard let data = try? JSONEncoder().encode(list) else { return }
+        UserDefaults.standard.set(data, forKey: "macros")
+        MacroEngine.shared.updateMacros(list)
+        objectWillChange.send()
+    }
+
+    func addMacro(_ macro: MacroDefinition) {
+        var list = macros; list.append(macro); saveMacros(list)
+    }
+
+    func updateMacro(_ macro: MacroDefinition) {
+        var list = macros
+        if let idx = list.firstIndex(where: { $0.id == macro.id }) { list[idx] = macro }
+        saveMacros(list)
+    }
+
+    func deleteMacro(id: UUID) {
+        var list = macros; list.removeAll { $0.id == id }; saveMacros(list)
     }
 
     // MARK: - Zone-Based Actions
@@ -623,11 +748,15 @@ final class GestureConfig: ObservableObject {
 
     /// Loads per-gesture cooldown overrides from UserDefaults.
     private func loadCooldownOverrides() {
+        var overrides: [String: TimeInterval] = [:]
         for info in Self.all {
             if let val = UserDefaults.standard.object(forKey: "cooldown.\(info.id)") as? Double {
-                perGestureCooldown[info.id] = val
+                overrides[info.id] = val
             }
         }
+        os_unfair_lock_lock(&enabledLock)
+        perGestureCooldown = overrides
+        os_unfair_lock_unlock(&enabledLock)
     }
 
     // MARK: - Launch at Login
@@ -722,9 +851,11 @@ final class GestureConfig: ObservableObject {
         if let bundleId {
             os_unfair_lock_lock(&appOverridesLock)
             frameAppOverrides = cachedAppOverrides?[bundleId]
+            frameAppActionOverrides = cachedAppActionOverrides?[bundleId]
             os_unfair_lock_unlock(&appOverridesLock)
         } else {
             frameAppOverrides = nil
+            frameAppActionOverrides = nil
         }
     }
 

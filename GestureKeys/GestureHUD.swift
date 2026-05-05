@@ -27,19 +27,24 @@ final class GestureHUD {
         self.panel = panel
 
         if hudContentView == nil {
-            let cv = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 52))
-            cv.wantsLayer = true
-            cv.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.95).cgColor
-            cv.layer?.cornerRadius = 10
+            let blur = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 280, height: 52))
+            blur.material = .hudWindow
+            blur.state = .active
+            blur.blendingMode = .behindWindow
+            blur.wantsLayer = true
+            blur.layer?.cornerRadius = 8
+            blur.layer?.masksToBounds = true
+
+            let cv = blur
 
             let nl = NSTextField(labelWithString: "")
-            nl.font = NSFont.systemFont(ofSize: 14, weight: .semibold)
+            nl.font = NSFont.systemFont(ofSize: 14, weight: .bold)
             nl.textColor = .labelColor
             nl.alignment = .center
             nl.frame = NSRect(x: 16, y: 26, width: 248, height: 18)
 
             let al = NSTextField(labelWithString: "")
-            al.font = NSFont.systemFont(ofSize: 11)
+            al.font = NSFont.systemFont(ofSize: 10)
             al.textColor = .secondaryLabelColor
             al.alignment = .center
             al.frame = NSRect(x: 16, y: 8, width: 248, height: 14)
@@ -70,7 +75,7 @@ final class GestureHUD {
         panel.alphaValue = 1.0
         panel.orderFront(nil)
 
-        hideTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: false) { [weak self] _ in
+        hideTimer = Timer.scheduledTimer(withTimeInterval: 1.2, repeats: false) { [weak self] _ in
             self?.fadeOut()
         }
     }

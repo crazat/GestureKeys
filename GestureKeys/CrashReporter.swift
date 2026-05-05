@@ -5,43 +5,43 @@ import AppKit
 
 /// C string path for the crash log file, computed once at install time.
 /// Signal handlers must use only async-signal-safe functions (POSIX open/write/close).
-private var crashLogPathCString: [CChar] = []
+private var crashLogPathCString: UnsafeMutablePointer<CChar>?
 
 /// Static message prefix written by the signal handler (no dynamic allocation).
 private let signalCrashPrefix: StaticString = "GestureKeys Crash Report\n========================\nReason: Fatal Signal\n\nSignal: "
 
-/// Signal number → name mapping (static, no allocation).
-private let signalNames: [(sig: Int32, name: StaticString)] = [
-    (SIGSEGV, "SIGSEGV"), (SIGBUS, "SIGBUS"), (SIGABRT, "SIGABRT"),
-    (SIGFPE, "SIGFPE"), (SIGILL, "SIGILL"), (SIGTRAP, "SIGTRAP"),
-]
-
 // MARK: - C-compatible signal handler (async-signal-safe only)
+
+private func crashSignalName(_ sigNum: Int32) -> StaticString {
+    switch sigNum {
+    case SIGSEGV: return "SIGSEGV"
+    case SIGBUS: return "SIGBUS"
+    case SIGABRT: return "SIGABRT"
+    case SIGFPE: return "SIGFPE"
+    case SIGILL: return "SIGILL"
+    case SIGTRAP: return "SIGTRAP"
+    default: return "UNKNOWN"
+    }
+}
+
+private func writeStaticString(_ string: StaticString, to fd: Int32) {
+    string.withUTF8Buffer { buf in
+        _ = Darwin.write(fd, buf.baseAddress, buf.count)
+    }
+}
 
 private func crashSignalHandler(_ sigNum: Int32) {
     // Use only POSIX I/O — no Foundation, no String, no allocation.
-    guard !crashLogPathCString.isEmpty else {
+    guard let path = crashLogPathCString else {
         signal(sigNum, SIG_DFL)
         raise(sigNum)
         return
     }
-    let fd = crashLogPathCString.withUnsafeBufferPointer { buf -> Int32 in
-        Darwin.open(buf.baseAddress!, O_WRONLY | O_CREAT | O_TRUNC, 0o644)
-    }
+    let fd = Darwin.open(path, O_WRONLY | O_CREAT | O_TRUNC, 0o644)
     if fd >= 0 {
-        // Write prefix
-        signalCrashPrefix.withUTF8Buffer { buf in
-            _ = Darwin.write(fd, buf.baseAddress, buf.count)
-        }
-        // Write signal name
-        let name = signalNames.first(where: { $0.sig == sigNum })?.name ?? "UNKNOWN"
-        name.withUTF8Buffer { buf in
-            _ = Darwin.write(fd, buf.baseAddress, buf.count)
-        }
-        let nl: StaticString = "\n"
-        nl.withUTF8Buffer { buf in
-            _ = Darwin.write(fd, buf.baseAddress, buf.count)
-        }
+        writeStaticString(signalCrashPrefix, to: fd)
+        writeStaticString(crashSignalName(sigNum), to: fd)
+        writeStaticString("\n", to: fd)
         Darwin.close(fd)
     }
     signal(sigNum, SIG_DFL)
@@ -62,7 +62,8 @@ enum CrashReporter {
         try? FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
 
         // Pre-compute C string path for the signal handler (must not allocate at signal time)
-        crashLogPathCString = Array(logPath.path.utf8CString)
+        free(crashLogPathCString)
+        crashLogPathCString = strdup(logPath.path)
 
         // Exception handler runs in normal context — Foundation APIs are safe here
         NSSetUncaughtExceptionHandler { exception in

@@ -8,7 +8,7 @@ struct OnboardingView: View {
     @State private var hasPermission = AXIsProcessTrusted()
     @Environment(\.dismiss) private var dismiss
 
-    private let permissionTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
+    private let permissionTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -30,11 +30,11 @@ struct OnboardingView: View {
                 Spacer()
 
                 // Page indicators
-                HStack(spacing: 6) {
+                HStack(spacing: 8) {
                     ForEach(0..<3, id: \.self) { i in
                         Circle()
                             .fill(i == currentPage ? Color.accentColor : Color.gray.opacity(0.3))
-                            .frame(width: 6, height: 6)
+                            .frame(width: 8, height: 8)
                     }
                 }
 
@@ -48,6 +48,10 @@ struct OnboardingView: View {
                     Button("시작하기") {
                         UserDefaults.standard.set(true, forKey: "onboardingCompleted")
                         dismiss()
+                        // Show cheat sheet so user sees all available gestures
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            CheatSheetWindowController.shared.show()
+                        }
                     }
                     .keyboardShortcut(.defaultAction)
                 }
@@ -64,7 +68,7 @@ struct OnboardingView: View {
         VStack(spacing: 16) {
             Spacer()
             Image(systemName: "hand.raised.fingers.spread")
-                .font(.system(size: 48))
+                .font(.system(size: 56))
                 .foregroundColor(.accentColor)
             Text("GestureKeys에 오신 것을 환영합니다")
                 .font(.title2)
@@ -121,14 +125,14 @@ struct OnboardingView: View {
                 .fontWeight(.bold)
 
             VStack(alignment: .leading, spacing: 8) {
-                quickTip(icon: "hand.tap", text: "두 손가락 더블탭 → 잘라내기")
-                quickTip(icon: "hand.tap", text: "세 손가락 더블탭 → 붙여넣기")
-                quickTip(icon: "hand.draw", text: "두 손가락 스와이프 → 뒤로/앞으로")
-                quickTip(icon: "hand.raised", text: "세 손가락 클릭 → 탭 닫기")
+                quickTip(icon: "scissors", text: "두 손가락 더블탭 → 잘라내기")
+                quickTip(icon: "doc.on.clipboard", text: "세 손가락 더블탭 → 붙여넣기")
+                quickTip(icon: "arrow.left.arrow.right", text: "두 손가락 스와이프 → 뒤로/앞으로")
+                quickTip(icon: "xmark.circle", text: "세 손가락 클릭 → 탭 닫기")
             }
             .padding(.horizontal, 40)
 
-            Text("메뉴바 아이콘에서 설정과 바로가기를 확인할 수 있습니다.")
+            Text("메뉴바 아이콘 → \"바로가기\"에서 모든 제스처를 확인할 수 있습니다.\n\"설정\"에서 제스처를 켜고 끄거나 액션을 변경하세요.")
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)

@@ -26,7 +26,10 @@ enum SettingsMigration {
         guard stored < currentVersion else { return }
 
         for version in stored..<currentVersion {
-            guard version < migrations.count else { break }
+            guard version < migrations.count else {
+                NSLog("GestureKeys: WARNING — migration v%d missing (currentVersion=%d, migrations=%d)", version, currentVersion, migrations.count)
+                break
+            }
             NSLog("GestureKeys: Running settings migration v%d → v%d", version, version + 1)
             migrations[version](defaults)
         }

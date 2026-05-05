@@ -19,7 +19,7 @@ typealias MTContactFrameCallback = @convention(c) (
 // MARK: - Device Management
 
 @_silgen_name("MTDeviceCreateList")
-func MTDeviceCreateList() -> CFArray
+func MTDeviceCreateList() -> CFArray?
 
 @_silgen_name("MTDeviceStart")
 func MTDeviceStart(_ device: MTDeviceRef, _ mode: Int32) -> Int32

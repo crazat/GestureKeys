@@ -42,6 +42,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         NSLog("GestureKeys: App launched from %@", Bundle.main.bundlePath)
 
+        // LSUIElement apps have no main menu, so standard keyboard shortcuts
+        // (Cmd+W, Cmd+Q) don't work. Add a hidden menu with these key equivalents.
+        let mainMenu = NSMenu()
+        let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "닫기", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        let appMenuItem = NSMenuItem()
+        appMenuItem.submenu = appMenu
+        mainMenu.addItem(appMenuItem)
+        NSApp.mainMenu = mainMenu
+
+        UpdaterManager.shared.startIfConfigured()
+
         menuBarController = MenuBarController(engine: engine)
         menuBarController?.setup()
 
@@ -91,13 +103,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Poll every 1 second until accessibility permission is granted, then start engine.
     private func startAccessibilityPolling() {
+        guard accessibilityTimer == nil else { return }
         NSLog("GestureKeys: Waiting for accessibility permission...")
         accessibilityTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
             if AXIsProcessTrusted() {
                 timer.invalidate()
                 self?.accessibilityTimer = nil
                 NSLog("GestureKeys: Accessibility permission granted")
-                self?.engine.start()
+                let engineEnabled = UserDefaults.standard.object(forKey: "engineEnabled") as? Bool ?? true
+                if engineEnabled {
+                    self?.engine.start()
+                } else {
+                    NSLog("GestureKeys: Engine disabled by user — permission granted but start skipped")
+                }
             }
         }
     }

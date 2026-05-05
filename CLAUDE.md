@@ -23,6 +23,34 @@ open ~/Applications/GestureKeys.app
 
 **참고:** Apple Development 인증서로 서명하므로 재빌드해도 접근성 권한이 유지됨. 최초 1회만 손쉬운 사용에서 허용하면 됨. 앱은 권한 미부여 시 1초 간격으로 폴링하여 권한 부여 즉시 엔진을 시작함.
 
+## 릴리스 빌드 & 배포
+
+```bash
+# Release 빌드 + DMG 패키징 + Notarization
+./scripts/create-release.sh
+
+# Sparkle Ed25519 키 생성 (최초 1회)
+./scripts/generate-sparkle-keys.sh
+```
+
+**배포 방식:** Direct Distribution (Mac App Store 불가 — MultitouchSupport.framework이 private API)
+- Developer ID Application 인증서 + Hardened Runtime + Notarization
+- Sparkle 2 자동 업데이트 (Ed25519 서명, GitHub Releases 호스팅)
+- DMG 패키지 (create-dmg 또는 hdiutil 폴백)
+
+**Hardened Runtime Entitlements:**
+- `com.apple.security.cs.disable-library-validation` — MultitouchSupport.framework 로드
+- `com.apple.security.automation.apple-events` — osascript 강제종료
+
+**Notarization 설정:**
+```bash
+# 자격 증명 저장 (최초 1회)
+xcrun notarytool store-credentials GestureKeys \
+    --apple-id YOUR_APPLE_ID \
+    --team-id 2L4F5S6DCV \
+    --password APP_SPECIFIC_PASSWORD
+```
+
 ## 기술 스택
 
 | 항목 | 값 |
@@ -31,19 +59,26 @@ open ~/Applications/GestureKeys.app
 | 플랫폼 | macOS 14.0+ |
 | 빌드 | XcodeGen (`project.yml`) |
 | UI | SwiftUI (설정창) + AppKit (메뉴바) |
-| 코드서명 | Apple Development (접근성 권한 유지를 위해 ad-hoc 대신 사용) |
+| 코드서명 | Debug: Apple Development / Release: Developer ID Application |
+| Hardened Runtime | Release에서 활성화 |
 | 샌드박스 | 비활성 |
 | Bundle ID | com.gesturekeys.app |
 | LSUIElement | true (Dock에 표시 안 됨) |
+| 자동 업데이트 | Sparkle 2 (Ed25519 서명) |
 
 ## 프로젝트 구조
 
 ```
 GestureKeys/
-├── project.yml                          # XcodeGen 설정
+├── project.yml                          # XcodeGen 설정 (Debug/Release, Sparkle, Hardened Runtime)
 ├── install.sh                           # 빌드 + ~/Applications 설치 + 실행 스크립트
+├── scripts/
+│   ├── create-release.sh                # Release 빌드 + DMG 패키징 + Notarization
+│   └── generate-sparkle-keys.sh         # Sparkle Ed25519 키 생성
+├── CHANGELOG.md                         # 버전별 변경 내역
+├── PRIVACY.md                           # 개인정보 처리방침
 └── GestureKeys/
-    ├── GestureKeysApp.swift             # @main 진입점 (접근성 폴링, 크래시 리포팅, 설정 마이그레이션)
+    ├── GestureKeysApp.swift             # @main 진입점 (접근성 폴링, 크래시 리포팅, 설정 마이그레이션, LSUIElement용 Cmd+W 메뉴)
     ├── Info.plist
     ├── GestureKeys.entitlements
     │
@@ -55,17 +90,21 @@ GestureKeys/
     │
     ├── SettingsMigration.swift          # 설정 스키마 버전 관리 & 순차 마이그레이션
     ├── LaunchAtLoginHelper.swift        # SMAppService 래퍼 (로그인 시 자동 시작)
-    ├── CrashReporter.swift              # 크래시 로그 (NSException + signal handler)
+    ├── CrashReporter.swift              # 크래시 로그 (NSException + signal handler + stack trace)
+    ├── MacroEngine.swift               # 멀티 액션 매크로 엔진 (시퀀스 매칭, 타임아웃, 실행)
+    ├── MacroEditorView.swift           # 매크로 생성/편집 SwiftUI 시트
+    ├── UpdaterManager.swift             # Sparkle 자동 업데이트 싱글톤 (SUPublicEDKey 미설정 시 비활성)
+    ├── AboutView.swift                  # 정보 윈도우 (버전, 크레딧, Sparkle 업데이트 확인)
     ├── GestureStats.swift               # 제스처 사용 통계 (일별 집계, 추천)
     │
-    ├── MenuBarController.swift          # 상태바 메뉴
-    ├── SettingsView.swift               # SwiftUI 설정 윈도우 (존 설정, Shortcuts 이름, 쿨다운 토글 포함)
-    ├── StatsView.swift                  # 통계 대시보드 (차트, 추천, 요약 카드)
-    ├── OnboardingView.swift             # 첫 실행 온보딩 (3페이지)
-    ├── CheatSheetView.swift             # 바로가기 참조 윈도우
-    ├── GestureMonitorView.swift         # 제스처 테스트 모드 + 터치 히트맵 (Canvas 20×20)
-    ├── GestureHUD.swift                 # 제스처 인식 HUD 표시
-    ├── KeyCaptureView.swift             # 사용자 지정 키 캡처
+    ├── MenuBarController.swift          # 상태바 메뉴 (일시 정지 타이머, 최근 제스처 툴팁)
+    ├── SettingsView.swift               # SwiftUI 설정 윈도우 (존, Shortcuts, 쿨다운, 매크로, 앱별 오버라이드, 검색 디바운스)
+    ├── StatsView.swift                  # 통계 대시보드 (그래디언트 차트, 추천+끄기 버튼, 요약 카드)
+    ├── OnboardingView.swift             # 첫 실행 온보딩 (3페이지, 완료 시 바로가기 시트 자동 오픈)
+    ├── CheatSheetView.swift             # 바로가기 참조 윈도우 (Shortcuts/셸 명령 실제 이름 표시)
+    ├── GestureMonitorView.swift         # 제스처 테스트 모드 + 터치 히트맵 (Canvas 20×20, 터치 카운트 강조)
+    ├── GestureHUD.swift                 # 제스처 인식 HUD 표시 (NSVisualEffectView 블러, 매크로 진행 표시)
+    ├── KeyCaptureView.swift             # 사용자 지정 키 캡처 (포커스 애니메이션)
     │
     ├── ThreeFingerClickRecognizer.swift  # 3손가락 클릭 → 탭 닫기 ★최우선 (존 지원), Force Touch → 앱 종료
     ├── FourFingerClickRecognizer.swift   # 4손가락 클릭 → 전체화면, Force Touch → 앱 숨기기
@@ -102,8 +141,9 @@ GestureEngine.processTouches()
   ↓  인식기가 fireAction() 호출 → pendingActions 배열에 버퍼링
   ↓  takePendingActions() → os_unfair_lock_unlock
 KeySynthesizer — lock 해제 후 CGEvent 합성 실행 (지연 실행 패턴)
+  ↓  MacroEngine.interceptGesture() → passthrough/consumed/completed
   ↓  쿨다운 체크 → 통계 기록 (GestureStats.shared.record)
-  ↓  .shortcut 액션 시 /usr/bin/shortcuts run 실행
+  ↓  .shortcut 액션 시 /usr/bin/shortcuts run 실행 (15s 타임아웃)
 ```
 
 ### 앱 시작 순서
@@ -111,10 +151,13 @@ KeySynthesizer — lock 해제 후 CGEvent 합성 실행 (지연 실행 패턴)
 ```
 CrashReporter.install()          — 크래시 핸들러 설치 (최우선)
 SettingsMigration.runIfNeeded()   — 설정 스키마 마이그레이션
-MenuBarController.setup()         — 메뉴바 UI
-OnboardingWindowController        — 첫 실행 온보딩
+NSApp.mainMenu 설정               — LSUIElement용 Cmd+W 단축키
+MenuBarController.setup()         — 메뉴바 UI (일시 정지 서브메뉴 포함)
+OnboardingWindowController        — 첫 실행 온보딩 → 완료 시 CheatSheet 자동 오픈
 CrashReporter.checkForPreviousCrash() — 이전 크래시 알림
 AXIsProcessTrusted() → engine.start() or 폴링
+  engine.start() 내부: GestureConfig.loadMacros() → MacroEngine.updateMacros()
+                       KeySynthesizer.prewarmInputSourceCache()
 ```
 
 ### CGEventTap (물리 클릭 + 시스템 키 가로채기)
@@ -147,7 +190,8 @@ AXIsProcessTrusted() → engine.start() or 폴링
 - `enabledLock`: `GestureConfig.enabledCache` + `cachedFrontmostBundleId` 보호 (터치 콜백 읽기 ↔ UI 쓰기)
 - `appOverridesLock`: 앱별 오버라이드 캐시 보호
 - `inputSourceLock`: `KeySynthesizer.cachedSources`/`sourceIdToIndex` 보호 (EventTap 콜백 읽기 ↔ 알림 콜백 무효화)
-- `GestureStats.lock`: 통계 레코드 읽기/쓰기 보호
+- `GestureStats.lock`: 통계 레코드 + 최근 제스처 링 버퍼 읽기/쓰기 보호
+- `MacroEngine.macrosLock`: 매크로 캐시 보호 (메인 스레드 쓰기 ↔ 터치 콜백 읽기)
 - **지연 실행 패턴**: `fireAction()`이 `pendingActions`에 클로저 버퍼링 (engineLock 하), lock 해제 후 실행. CGEvent 포스팅이 lock 밖에서 실행되어 lock 점유 시간 최소화
 - UI 쓰기는 메인 스레드 (@Published + SwiftUI)
 - `cachedHudEnabled`/`cachedHapticEnabled`/`actionCache`: 인메모리 캐시로 UserDefaults I/O 제거
@@ -249,23 +293,38 @@ final class XxxRecognizer {
 - **로그인 시 자동 시작**: `LaunchAtLoginHelper` → `SMAppService` (macOS 13+). `GestureConfig.launchAtLogin`
 - **쿨다운**: `KeySynthesizer.lastFireTime`으로 제스처별 발동 간격 제한 (탭 0.3s, 나머지 0.5s)
 - **Shortcuts 연동**: `.shortcut` 액션 → `/usr/bin/shortcuts run "name"` 실행
+- **셸 명령 실행**: `.shellCommand` 액션 → `/bin/zsh -c "command"` 실행 (설정 UI에서 명령 입력)
+- **미들클릭**: `.middleClick` 액션 → `CGEvent(.otherMouseDown/Up, mouseButton: .center)` (브라우저 탭 닫기/새 탭 링크 등)
+- **윈도우 스냅**: `.snapLeft`/`.snapRight`/`.snapFill`/`.snapTopLeft`/`.snapTopRight`/`.snapBottomLeft`/`.snapBottomRight` → macOS 15 네이티브 타일링 (fn+⌃+방향키)
+- **설정 Export/Import**: JSON 파일로 전체 설정 내보내기/불러오기 (셸 명령, 커스텀 키, 매크로 포함). Import 시 키 화이트리스트 검증. 성공/실패 알림 피드백.
+- **앱별 액션 오버라이드**: `GestureConfig.appActionOverrides` — 앱별로 제스처 비활성화 + 액션 리매핑 가능. `appAwareActionFor()` → 프레임별 스냅샷 (`frameAppActionOverrides`). NSOpenPanel 앱 선택기 + "이전 앱" 원클릭 추가 카드. 제스처 목록 카테고리별 그룹화.
+- **일시 정지**: 15분/30분/1시간 타이머. 메뉴바에서 선택, 시간 경과 후 자동 재활성화. "일시 정지 취소" 메뉴 아이템. 툴팁에 남은 시간 표시.
+- **검색**: 제스처 이름 + 기본 액션 + 리매핑된 액션으로 검색. 150ms 디바운스 (한국어 IME 조합 깜박임 방지). 결과 없음 시 empty state.
 - **대각선 스와이프**: `ThreeFingerSwipeRecognizer`에서 비율 0.7~1.4 = 대각선, 4분면 판정
 - **존 기반 액션**: `TrackpadZone` (x < 0.5 기준 좌/우). 대상: `twoFingerDoubleTap`, `threeFingerDoubleTap`, `threeFingerClick`, `fiveFingerTap`
 - **터치 히트맵**: `GestureMonitorView` Canvas 20×20 그리드 (100ms 스로틀)
-- **통계**: `GestureStats.shared` 일별 집계 30일 보관, `StatsView` 대시보드 + 추천
+- **통계**: `GestureStats.shared` 일별 집계 30일 보관, `StatsView` 대시보드 + 추천 ("끄기" 액션 버튼). 최근 5개 제스처 링 버퍼 (`recentGestureNames()`). 일 평균 실제 데이터 일수 기반 (`daysWithData()`).
 - **크래시 리포팅**: `CrashReporter` → `~/Library/Logs/GestureKeys/crash.log`
 - **설정 마이그레이션**: `SettingsMigration` 순차 체인, `currentVersion` 범프로 스키마 변경 대응
-- **Caps Lock 한영전환**: EventTap에서 Caps Lock(0x39) 인터셉트 → Carbon TIS API로 즉시 입력 소스 전환 (macOS 딜레이 없음). `GestureConfig.capsLockInputSwitch` 토글. 50ms 디바운스. **주의**: macOS 시스템 설정의 "Caps Lock으로 입력 소스 전환"은 꺼야 이중 전환 방지.
-  - **캐싱**: `TISCreateInputSourceList` 결과를 캐시 (`cachedSources`/`sourceIdToIndex`). `kTISNotifyEnabledKeyboardInputSourcesChanged` 알림으로 자동 무효화. O(1) 해시맵 룩업.
+- **Caps Lock 한영전환**: EventTap에서 Caps Lock(0x39) 인터셉트 → Carbon TIS API로 즉시 입력 소스 전환. `GestureConfig.capsLockInputSwitch` 토글. **플래그 상태 변화 감지**: `.maskAlphaShift` 플래그 전환 시에만 토글 (key-up 이벤트 자연 무시, 홀드 시간 무관). 전환이 성공한 경우에만 마지막 Caps Lock 플래그 상태를 확정하고, 실패 시 `nil`로 되돌려 다음 Caps 이벤트에서 재시도한다. **주의**: macOS 시스템 설정의 "Caps Lock으로 입력 소스 전환"은 꺼야 이중 전환 방지. **참고**: Apple 내장 키보드는 Caps Lock에 ~250ms 하드웨어 딜레이가 있어 매우 빠른 탭은 감지 안 될 수 있음 (IOHIDManager로 우회 가능하나 Input Monitoring 권한 필요).
+  - **캐싱**: `TISCreateInputSourceList` 결과를 캐시 (`cachedSources`/`sourceIdToIndex`). `kTISNotifyEnabledKeyboardInputSourcesChanged` 알림으로 자동 무효화. O(1) 해시맵 룩업. 엔진 시작 시 `prewarmInputSourceCache()`로 캐시 프리워밍. observer 등록/해제 상태도 `inputSourceLock`으로 보호한다.
   - **동기 실행**: EventTap 콜백에서 동기 실행하여 전환 완료 전에 다음 키 이벤트가 처리되지 않도록 보장 (영→한 첫 글자 race 방지). 캐시 히트 시 ~6-25ms.
-  - **실패 복구**: `TISSelectInputSource` 실패 시 캐시 무효화 + 1회 재시도. 엔진 stop 시 캐시 정리 (`invalidateInputSourceCache()`).
+  - **소스 선택**: 현재 입력 소스 ID가 캐시에 없으면 `kTISPropertyInputSourceIsSelected`와 Korean/ASCII 판별을 fallback으로 사용한다. ABC ↔ 2-Set Korean처럼 한영 쌍이 있으면 임의 순환보다 한글/영문 타깃을 우선한다.
+  - **실패 복구**: `TISSelectInputSource` 실패 시 캐시 무효화 + 1회 재시도. 실패 여부를 `Bool`로 반환하여 Caps Lock 이벤트 상태 기록과 재시도 여부에 반영한다. 엔진 stop 시 캐시 정리 (`invalidateInputSourceCache()`).
 - **한영전환 액션**: `KeySynthesizer.Action.toggleInputSource` — 어떤 제스처든 한영전환에 매핑 가능
+- **멀티 액션 매크로**: `MacroEngine` — 2-3개 제스처 시퀀스를 1-5개 액션 시퀀스로 매핑. UserDefaults JSON 저장.
+  - **트리거**: 제스처 ID 시퀀스 (예: ["threeFingerLongPress", "threeFingerDoubleTap"])
+  - **타임아웃**: 제스처 간 대기 시간 (300-2000ms, 기본 800ms). 초과 시 첫 제스처 단독 실행.
+  - **인터셉트**: `KeySynthesizer.fireAction()` 진입 시 `MacroEngine.interceptGesture()` 호출. Decision: passthrough/consumed/completed.
+  - **HUD**: 매크로 진행 상태 표시 ("단계 1/2 ✓ → 다음 제스처 대기..."), 완료/취소 피드백.
+  - **결과 액션**: builtIn/shortcut/shellCommand/delay 조합. 딜레이로 액션 간 시간 차 설정 가능.
+  - **설정 UI**: SettingsView 매크로 섹션 + MacroEditorView 시트 (트리거 피커, 액션 편집기, 타임아웃 슬라이더)
 
 ## 성능 & 안정성 원칙
 
 - **Hot path (60Hz+)**: heap 할당 최소화 (`removeAll(keepingCapacity:)`, `UnsafeBufferPointer.filter`), 인메모리 캐시로 UserDefaults I/O 제거, 지연 실행 패턴으로 lock 점유 최소화
 - **메모리**: `Unmanaged.passUnretained(event)` 참조 누수 방지, GestureHUD NSView 재사용
-- **안정성**: `engineLock`/`engineInstance` use-after-free 방지, `synthesisLock` data race 제거, `firedTimeout` 2.0초 stuck 방지, `MTTouch._sizeCheck` 레이아웃 assertion
+- **안정성**: `engineLock`/`engineInstance` use-after-free 방지, `synthesisLock` data race 제거, `firedTimeout` 2.0초 stuck 방지, `MTTouch._sizeCheck` 레이아웃 assertion, `startMultitouchDevices()` 방어적 초기화 (이중 등록 방지), `reinstallEventTap()` 3초 쿨다운 (중복 reinstall 방지), `MTDeviceCreateList()` nullable 바인딩, `processTouches()` count ≤ 0 가드, `eventTapRetryCount` stop() 시 리셋, Process 실행 타임아웃 (15s/10s), `reloadFromDefaults()` enabledLock 보호
 
 ## 새 제스처 추가 절차
 
@@ -304,6 +363,7 @@ WindowServer 시스템 레벨 단축키라 CGEvent.post 불가. osascript + Syst
 
 ### 재빌드 후 접근성 권한
 Apple Development 인증서로 서명하므로 재빌드해도 접근성 권한이 유지됨. 인증서가 만료/변경된 경우에만 시스템 설정에서 재허용 필요.
+**주의: Entitlements 변경 시 권한 무효화** — macOS TCC가 CDHash(코드 서명 해시) 기반으로 권한을 관리하므로, entitlements 파일 변경 시 CDHash가 달라져 접근성 권한이 사일런트하게 무효화됨. 손쉬운 사용에서 끄고 → 다시 켜면 해결. 일회성 이벤트.
 
 ### Force Touch 클릭 (3FC/4FC/5FC)
 3FC/4FC/5FC의 "세게 클릭"은 Force Touch 압력 감지로 발동. 클릭 후 150ms 안정화 구간에서 기준 압력(basePressure)을 기록하고, 이후 압력이 basePressure × 1.5를 초과하면 Force Touch로 판정. 2초 안전 타임아웃: 3FC/4FC는 일반 클릭 발동, 5FC는 아무 동작 없이 취소 (안전 장치). clickHeld 상태일 때 해당 long press recognizer의 `processTouches` 호출을 건너뜀 (3FLP, 4FLP). **참고**: 2손가락 Force Touch는 시스템 우클릭(`.rightMouseDown`)과 충돌하여 구현 불가.
@@ -322,24 +382,31 @@ macOS가 잠자기/화면잠금/시스템 부하/유휴 상태 등으로 CGEvent
 1. Mach port 무효화: `reEnableEventTap()`은 이미 죽은 Mach port에 대해 `CGEvent.tapEnable()`만 호출 — 효과 없음
 2. App Nap: macOS가 윈도우 없는 메뉴바 앱(LSUIElement)을 유휴 시 App Nap으로 중단 → Timer 정지 + EventTap 콜백 지연 → `tapDisabledByTimeout` 발생
 3. 화면 잠금 ≠ Sleep: 화면잠금(Ctrl+Cmd+Q, 스크린세이버)은 `willSleepNotification`을 발생시키지 않아 복구 로직 미실행
-**해결** (6단계):
+**해결** (9단계):
 1. `removeEventTap()`에서 `CFMachPortInvalidate(tap)` 추가 — 시스템 레벨 이벤트 탭 등록을 완전 해제
 2. `handleWake()`에서 `reEnableEventTap()` → `reinstallEventTap()`으로 변경 — 이벤트 탭 완전 재생성 (2초 딜레이)
-3. `startEventTapHealthCheck()` — 10초 주기로 `CFMachPortIsValid()` + `CGEvent.tapIsEnabled(tap:)` 확인, 무효화 또는 비활성화 시 자동 reinstall/re-enable
+3. `startEventTapHealthCheck()` — 5초 주기로 `CFMachPortIsValid()` + `CGEvent.tapIsEnabled(tap:)` 확인, 무효화 또는 비활성화 시 자동 reinstall/re-enable
 4. `ProcessInfo.processInfo.beginActivity(options:reason:)` — App Nap 방지. 엔진 start 시 활성화, stop 시 해제
 5. `observeScreenLock()` — `DistributedNotificationCenter`로 `com.apple.screenIsUnlocked` 감시, 화면 해제 시 EventTap 상태 확인 및 복구
 6. 헬스체크에서 `CGEvent.tapIsEnabled(tap:)` 추가 확인 — Mach port는 유효하지만 탭이 disabled인 사각지대 해소
+7. 멀티터치 콜백 생존 감지 — `lastTouchCallbackTime` 추적, 30초간 콜백 없으면 디바이스 자동 재등록
+8. 접근성 권한 자동 복구 — 헬스체크에서 `AXIsProcessTrusted()` 감시, 권한 복원 시 자동 `reinstallEventTap()`
+9. `eventTapRestoredNotification` — EventTap 복구 성공 시 메뉴바 아이콘 자동 복원
 
 ## 의존성
 
 - **MultitouchSupport.framework** (Apple private) — `@_silgen_name` 바인딩
 - **Carbon.HIToolbox** (Apple) — TIS API (입력 소스 전환)
 - **ServiceManagement** (Apple) — `SMAppService` 로그인 시 자동 시작 (macOS 13+)
-- 외부 라이브러리 없음 (순수 네이티브)
+- **Sparkle 2** (외부) — 자동 업데이트 (Ed25519 서명, SPM 의존성)
+- 기타 외부 라이브러리 없음
 
 ## 개발 참고
 
 - **SourceKit 진단 오류**: `@_silgen_name`으로 바인딩된 private framework 심볼은 SourceKit에서 "Cannot find in scope" 경고를 표시하지만, 실제 빌드는 정상 성공. 이 진단은 무시해도 안전.
+- **윈도우 위치 저장**: 모든 WindowController에서 `setFrameAutosaveName()` + `setFrameUsingName()` 패턴 사용. `center()`는 저장된 프레임이 없을 때만 호출.
+- **LSUIElement Cmd+W**: Dock에 안 보이는 메뉴바 앱은 기본 메뉴가 없어 Cmd+W/Cmd+Q 미작동. `GestureKeysApp`에서 숨겨진 `NSApp.mainMenu`에 `performClose` 키 이퀄런트 등록.
+- **카테고리 펼침/접힘 상태**: `expandedCategories` Set을 UserDefaults에 저장/복원 (키: `"expandedCategories"`).
 - **GitHub**: https://github.com/crazat/GestureKeys
 
 ## 구형 맥북 (2013 Intel) 레거시 빌드

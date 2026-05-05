@@ -4,5 +4,11 @@
 <dict>
     <key>com.apple.security.app-sandbox</key>
     <false/>
+    <!-- Hardened Runtime: Allow loading MultitouchSupport.framework (unsigned private framework) -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <!-- Hardened Runtime: Allow sending Apple Events to System Events (osascript for force quit) -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
 </dict>
 </plist>

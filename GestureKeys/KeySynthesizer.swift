@@ -47,6 +47,15 @@ enum KeySynthesizer {
         case kbBrightnessUp = "kbBrightnessUp"
         case kbBrightnessDown = "kbBrightnessDown"
         case toggleInputSource = "toggleInputSource"
+        case middleClick = "middleClick"
+        case snapLeft = "snapLeft"
+        case snapRight = "snapRight"
+        case snapFill = "snapFill"
+        case snapTopLeft = "snapTopLeft"
+        case snapTopRight = "snapTopRight"
+        case snapBottomLeft = "snapBottomLeft"
+        case snapBottomRight = "snapBottomRight"
+        case shellCommand = "shellCommand"
         case shortcut = "shortcut"
         case custom = "custom"
 
@@ -91,6 +100,15 @@ enum KeySynthesizer {
             case .kbBrightnessUp: return "키보드 백라이트 증가"
             case .kbBrightnessDown: return "키보드 백라이트 감소"
             case .toggleInputSource: return "한영전환 (⇪)"
+            case .middleClick: return "미들클릭"
+            case .snapLeft: return "윈도우 왼쪽 절반"
+            case .snapRight: return "윈도우 오른쪽 절반"
+            case .snapFill: return "윈도우 최대화"
+            case .snapTopLeft: return "윈도우 왼쪽 상단"
+            case .snapTopRight: return "윈도우 오른쪽 상단"
+            case .snapBottomLeft: return "윈도우 왼쪽 하단"
+            case .snapBottomRight: return "윈도우 오른쪽 하단"
+            case .shellCommand: return "셸 명령 실행"
             case .shortcut: return "Shortcuts 실행"
             case .custom: return "사용자 지정"
             }
@@ -135,6 +153,15 @@ enum KeySynthesizer {
             case .kbBrightnessUp: postKbBrightnessUp()
             case .kbBrightnessDown: postKbBrightnessDown()
             case .toggleInputSource: postToggleInputSource()
+            case .middleClick: postMiddleClick()
+            case .snapLeft: postSnapLeft()
+            case .snapRight: postSnapRight()
+            case .snapFill: postSnapFill()
+            case .snapTopLeft: postSnapTopLeft()
+            case .snapTopRight: postSnapTopRight()
+            case .snapBottomLeft: postSnapBottomLeft()
+            case .snapBottomRight: postSnapBottomRight()
+            case .shellCommand: break // handled separately with command string
             case .shortcut: break // handled separately with shortcut name
             case .custom: break // handled separately with keyCode/flags
             }
@@ -189,20 +216,12 @@ enum KeySynthesizer {
             NSLog("GestureKeys: No shortcut configured for %@", gestureId)
             return
         }
-        DispatchQueue.global(qos: .userInitiated).async {
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/usr/bin/shortcuts")
-            task.arguments = ["run", name]
-            do {
-                try task.run()
-                task.waitUntilExit()
-                if task.terminationStatus != 0 {
-                    NSLog("GestureKeys: Shortcut '%@' exited with status %d", name, task.terminationStatus)
-                }
-            } catch {
-                NSLog("GestureKeys: Failed to run shortcut '%@': %@", name, error.localizedDescription)
-            }
-        }
+        runProcessWithTimeout(
+            executable: "/usr/bin/shortcuts",
+            arguments: ["run", name],
+            timeout: 15.0,
+            label: "Shortcut '\(name)'"
+        )
     }
 
     /// Execute a custom key combo stored in UserDefaults.
@@ -325,13 +344,37 @@ enum KeySynthesizer {
         if isInCooldown(gestureId: gestureId) { return }
         recordFireTime(gestureId: gestureId)
 
-        // Capture config values while under lock (all in-memory, fast)
+        // Macro interception: check if this gesture is part of a macro sequence
+        let macroDecision = MacroEngine.shared.interceptGesture(gestureId: gestureId)
+        switch macroDecision {
+        case .consumed:
+            // Gesture consumed by macro — record stats but skip action
+            pendingActions.append { GestureStats.shared.record(gestureId: gestureId) }
+            return
+        case .completed(let macroActions):
+            // Macro completed — execute macro actions instead
+            pendingActions.append {
+                GestureStats.shared.record(gestureId: gestureId)
+                MacroEngine.executeMacroActions(macroActions)
+            }
+            return
+        case .passthrough:
+            break
+        }
+
+        // Standard action dispatch
+        fireStandaloneAction(gestureId: gestureId)
+    }
+
+    /// Fires a gesture's standalone action (config-aware, with feedback).
+    /// Used by normal dispatch and by MacroEngine timeout fallback.
+    /// Must be called while engineLock is held.
+    static func fireStandaloneAction(gestureId: String) {
         let config = GestureConfig.shared
         let feedback = config.feedbackSnapshot
-        let action = config.actionFor(gestureId)
+        let action = config.appAwareActionFor(gestureId)
         let gestureInfo = GestureConfig.info(for: gestureId)
 
-        // Defer heavy work (CGEvent posting, HUD, haptic) to after lock release
         pendingActions.append {
             GestureStats.shared.record(gestureId: gestureId)
             if feedback.hudEnabled, let info = gestureInfo {
@@ -346,6 +389,8 @@ enum KeySynthesizer {
                 executeShortcut(gestureId: gestureId)
             } else if action == .custom {
                 postCustomKey(forGesture: gestureId)
+            } else if action == .shellCommand {
+                executeShellCommand(gestureId: gestureId)
             } else {
                 action.execute()
             }
@@ -427,31 +472,21 @@ enum KeySynthesizer {
         // ⌥⌘Esc is handled by WindowServer at a level CGEvent.post can't reach.
         // Use System Events via AppleScript to trigger it reliably.
         lastSynthesisTimestamp = ProcessInfo.processInfo.systemUptime
-        DispatchQueue.global(qos: .userInitiated).async {
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            task.arguments = ["-e", "tell application \"System Events\" to key code 53 using {command down, option down}"]
-            do {
-                try task.run()
-                task.waitUntilExit()
-            } catch {
-                NSLog("GestureKeys: Failed to run force quit: %@", error.localizedDescription)
-            }
-        }
+        runProcessWithTimeout(
+            executable: "/usr/bin/osascript",
+            arguments: ["-e", "tell application \"System Events\" to key code 53 using {command down, option down}"],
+            timeout: 10.0,
+            label: "Force quit"
+        )
     }
 
     static func postSleepDisplay() {
-        DispatchQueue.global(qos: .userInitiated).async {
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/usr/bin/pmset")
-            task.arguments = ["displaysleepnow"]
-            do {
-                try task.run()
-                task.waitUntilExit()
-            } catch {
-                NSLog("GestureKeys: Failed to run pmset: %@", error.localizedDescription)
-            }
-        }
+        runProcessWithTimeout(
+            executable: "/usr/bin/pmset",
+            arguments: ["displaysleepnow"],
+            timeout: 10.0,
+            label: "Display sleep"
+        )
     }
 
     private static let kVK_ANSI_H: CGKeyCode = 0x04
@@ -467,6 +502,119 @@ enum KeySynthesizer {
     static func postCut()               { postKeyCombo(keyCode: kVK_ANSI_X, flags: .maskCommand) }
     static func postCopy()              { postKeyCombo(keyCode: kVK_ANSI_C, flags: .maskCommand) }
     static func postPaste()             { postKeyCombo(keyCode: kVK_ANSI_V, flags: .maskCommand) }
+
+    // MARK: - Middle Click
+
+    static func postMiddleClick() {
+        let pos = CGEvent(source: nil)?.location ?? .zero
+        guard let down = CGEvent(mouseEventSource: nil, mouseType: .otherMouseDown,
+                                  mouseCursorPosition: pos, mouseButton: .center),
+              let up = CGEvent(mouseEventSource: nil, mouseType: .otherMouseUp,
+                                mouseCursorPosition: pos, mouseButton: .center) else { return }
+        lastSynthesisTimestamp = ProcessInfo.processInfo.systemUptime
+        down.post(tap: .cghidEventTap)
+        up.post(tap: .cghidEventTap)
+    }
+
+    // MARK: - Window Snapping (macOS 15+ native tiling: fn+⌃+Arrow)
+
+    /// Posts fn+Control+Arrow key combo for macOS Sequoia native window tiling.
+    private static func postWindowTile(keyCode: CGKeyCode) {
+        postKeyCombo(keyCode: keyCode, flags: [.maskControl, .maskSecondaryFn])
+    }
+
+    static func postSnapLeft()        { postWindowTile(keyCode: CGKeyCode(kVK_LeftArrow)) }
+    static func postSnapRight()       { postWindowTile(keyCode: CGKeyCode(kVK_RightArrow)) }
+    static func postSnapFill()        { postWindowTile(keyCode: CGKeyCode(kVK_UpArrow)) }
+
+    /// Quarter tiling: fn+⌃+Arrow → half, then fn+⌃+perpendicular Arrow → quarter.
+    /// Posts two sequential tiling commands with a brief delay.
+    private static func postWindowQuarter(first: CGKeyCode, second: CGKeyCode) {
+        postWindowTile(keyCode: first)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            postWindowTile(keyCode: second)
+        }
+    }
+
+    static func postSnapTopLeft()     { postWindowQuarter(first: CGKeyCode(kVK_LeftArrow), second: CGKeyCode(kVK_UpArrow)) }
+    static func postSnapTopRight()    { postWindowQuarter(first: CGKeyCode(kVK_RightArrow), second: CGKeyCode(kVK_UpArrow)) }
+    static func postSnapBottomLeft()  { postWindowQuarter(first: CGKeyCode(kVK_LeftArrow), second: CGKeyCode(kVK_DownArrow)) }
+    static func postSnapBottomRight() { postWindowQuarter(first: CGKeyCode(kVK_RightArrow), second: CGKeyCode(kVK_DownArrow)) }
+
+    // MARK: - Shell Command
+
+    static func executeShellCommand(gestureId: String) {
+        guard let command = UserDefaults.standard.string(forKey: "shellCommand.\(gestureId)"),
+              !command.isEmpty else {
+            NSLog("GestureKeys: No shell command configured for %@", gestureId)
+            return
+        }
+        runProcessWithTimeout(
+            executable: "/bin/zsh",
+            arguments: ["-c", command],
+            timeout: 15.0,
+            label: "Shell command"
+        )
+    }
+
+    /// Execute an Apple Shortcut by name (direct, for macro use).
+    static func executeShortcut(name: String) {
+        runProcessWithTimeout(
+            executable: "/usr/bin/shortcuts",
+            arguments: ["run", name],
+            timeout: 15.0,
+            label: "Macro shortcut '\(name)'"
+        )
+    }
+
+    /// Execute a shell command directly (for macro use).
+    static func executeShellCommandDirect(command: String) {
+        guard !command.isEmpty else { return }
+        runProcessWithTimeout(
+            executable: "/bin/zsh",
+            arguments: ["-c", command],
+            timeout: 15.0,
+            label: "Macro shell command"
+        )
+    }
+
+    // MARK: - Process Execution with Timeout
+
+    /// Runs an external process on a background thread with a timeout.
+    /// If the process doesn't exit within `timeout` seconds, it is terminated
+    /// to prevent indefinite GCD thread pool exhaustion from hanging commands.
+    private static func runProcessWithTimeout(
+        executable: String,
+        arguments: [String],
+        timeout: TimeInterval,
+        label: String
+    ) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: executable)
+            task.arguments = arguments
+            do {
+                try task.run()
+            } catch {
+                NSLog("GestureKeys: Failed to run %@: %@", label, error.localizedDescription)
+                return
+            }
+
+            // Wait with timeout — kill the process if it hangs
+            let deadline = DispatchTime.now() + timeout
+            let semaphore = DispatchSemaphore(value: 0)
+            task.terminationHandler = { _ in semaphore.signal() }
+
+            if semaphore.wait(timeout: deadline) == .timedOut {
+                if task.isRunning {
+                    NSLog("GestureKeys: %@ timed out after %.0fs — terminating", label, timeout)
+                    task.terminate()
+                }
+            } else if task.terminationStatus != 0 {
+                NSLog("GestureKeys: %@ exited with status %d", label, task.terminationStatus)
+            }
+        }
+    }
 
     // MARK: - Media / Volume (system-defined media key events)
 
@@ -488,12 +636,18 @@ enum KeySynthesizer {
     private static var inputSourceLock = os_unfair_lock()
     /// Whether we registered for the input source change notification.
     private static var observingInputSourceChanges = false
+    /// Observer token for input source change notification (for explicit removal).
+    private static var inputSourceObserver: NSObjectProtocol?
 
     /// Registers for system input source change notifications to invalidate cache.
     static func startObservingInputSourceChanges() {
-        guard !observingInputSourceChanges else { return }
+        os_unfair_lock_lock(&inputSourceLock)
+        guard !observingInputSourceChanges else {
+            os_unfair_lock_unlock(&inputSourceLock)
+            return
+        }
         observingInputSourceChanges = true
-        DistributedNotificationCenter.default().addObserver(
+        inputSourceObserver = DistributedNotificationCenter.default().addObserver(
             forName: .init(kTISNotifyEnabledKeyboardInputSourcesChanged as String),
             object: nil, queue: nil
         ) { _ in
@@ -502,6 +656,7 @@ enum KeySynthesizer {
             sourceIdToIndex = [:]
             os_unfair_lock_unlock(&inputSourceLock)
         }
+        os_unfair_lock_unlock(&inputSourceLock)
     }
 
     /// Rebuilds the cached input source list.
@@ -518,8 +673,7 @@ enum KeySynthesizer {
 
         var idMap: [String: Int] = [:]
         for (i, src) in sourcesCF.enumerated() {
-            if let p = TISGetInputSourceProperty(src, kTISPropertyInputSourceID) {
-                let srcId = Unmanaged<CFString>.fromOpaque(p).takeUnretainedValue() as String
+            if let srcId = inputSourceID(src) {
                 idMap[srcId] = i
             }
         }
@@ -531,23 +685,96 @@ enum KeySynthesizer {
         return sourcesCF
     }
 
+    /// Pre-builds the input source cache so the first Caps Lock toggle
+    /// doesn't incur a TISCreateInputSourceList() delay (~2-5ms).
+    static func prewarmInputSourceCache() {
+        os_unfair_lock_lock(&inputSourceLock)
+        let needsBuild = cachedSources == nil
+        os_unfair_lock_unlock(&inputSourceLock)
+        if needsBuild {
+            _ = rebuildSourceCache()
+        }
+    }
+
     /// Invalidates the cached input source list so it is rebuilt on next toggle.
+    /// Also removes the DistributedNotificationCenter observer to prevent
+    /// unnecessary cache updates while the engine is stopped.
     static func invalidateInputSourceCache() {
+        let observer: NSObjectProtocol?
         os_unfair_lock_lock(&inputSourceLock)
         cachedSources = nil
         sourceIdToIndex = [:]
+        observer = inputSourceObserver
+        inputSourceObserver = nil
+        observingInputSourceChanges = false
         os_unfair_lock_unlock(&inputSourceLock)
+
+        if let observer {
+            DistributedNotificationCenter.default().removeObserver(observer)
+        }
+    }
+
+    private static func inputSourceID(_ source: TISInputSource) -> String? {
+        guard let pointer = TISGetInputSourceProperty(source, kTISPropertyInputSourceID) else { return nil }
+        return Unmanaged<CFString>.fromOpaque(pointer).takeUnretainedValue() as String
+    }
+
+    private static func inputSourceName(_ source: TISInputSource) -> String {
+        guard let pointer = TISGetInputSourceProperty(source, kTISPropertyLocalizedName) else { return "" }
+        return Unmanaged<CFString>.fromOpaque(pointer).takeUnretainedValue() as String
+    }
+
+    private static func inputSourceBool(_ source: TISInputSource, _ key: CFString) -> Bool {
+        guard let pointer = TISGetInputSourceProperty(source, key) else { return false }
+        return CFBooleanGetValue(Unmanaged<CFBoolean>.fromOpaque(pointer).takeUnretainedValue())
+    }
+
+    private static func isKoreanInputSource(_ source: TISInputSource) -> Bool {
+        let sourceText = "\(inputSourceID(source) ?? "") \(inputSourceName(source))"
+        return sourceText.localizedCaseInsensitiveContains("korean")
+            || sourceText.localizedCaseInsensitiveContains("hangul")
+    }
+
+    private static func isLatinInputSource(_ source: TISInputSource) -> Bool {
+        inputSourceBool(source, kTISPropertyInputSourceIsASCIICapable)
+            && !isKoreanInputSource(source)
+    }
+
+    private static func selectedSourceIndex(in sources: [TISInputSource]) -> Int? {
+        sources.firstIndex { inputSourceBool($0, kTISPropertyInputSourceIsSelected) }
+    }
+
+    private static func preferredInputSourceTargetIndex(
+        current: TISInputSource,
+        currentIdx: Int?,
+        sources: [TISInputSource]
+    ) -> Int? {
+        let koreanIndices = sources.indices.filter { isKoreanInputSource(sources[$0]) }
+        let latinIndices = sources.indices.filter { isLatinInputSource(sources[$0]) }
+        guard !koreanIndices.isEmpty, !latinIndices.isEmpty else { return nil }
+
+        let currentIsKorean = currentIdx.map { isKoreanInputSource(sources[$0]) } ?? isKoreanInputSource(current)
+        return currentIsKorean ? latinIndices.first : koreanIndices.first
     }
 
     /// Core toggle logic. Returns true if the switch succeeded.
     private static func performToggle(sources: [TISInputSource], idMap: [String: Int]) -> Bool {
+        guard !sources.isEmpty else { return false }
         let current = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
-        guard let curIdPtr = TISGetInputSourceProperty(current, kTISPropertyInputSourceID) else { return false }
-        let curId = Unmanaged<CFString>.fromOpaque(curIdPtr).takeUnretainedValue() as String
+        let currentIdx = inputSourceID(current).flatMap { idMap[$0] } ?? selectedSourceIndex(in: sources)
+        let fallbackIdx = currentIdx ?? 0
+        let targetIdx = preferredInputSourceTargetIndex(
+            current: current,
+            currentIdx: currentIdx,
+            sources: sources
+        ) ?? ((fallbackIdx + 1) % sources.count)
 
-        let currentIdx = idMap[curId] ?? 0
-        let status = TISSelectInputSource(sources[(currentIdx + 1) % sources.count])
-        return status == noErr
+        let status = TISSelectInputSource(sources[targetIdx])
+        if status != noErr {
+            NSLog("GestureKeys: Input source select failed with status %d", status)
+            return false
+        }
+        return true
     }
 
     /// Toggles the keyboard input source (e.g. Korean ↔ English).
@@ -556,7 +783,8 @@ enum KeySynthesizer {
     /// reaches the EventTap — prevents first-keystroke-in-wrong-source race.
     /// With caching, total block time is ~6-25ms (safe for EventTap).
     /// On failure (stale cache), invalidates and retries once.
-    static func postToggleInputSource() {
+    @discardableResult
+    static func postToggleInputSource() -> Bool {
         // Read cached sources
         os_unfair_lock_lock(&inputSourceLock)
         var sources = cachedSources
@@ -571,16 +799,26 @@ enum KeySynthesizer {
             os_unfair_lock_unlock(&inputSourceLock)
         }
 
-        guard let sources, sources.count >= 2 else { return }
+        guard let sources, sources.count >= 2 else {
+            NSLog("GestureKeys: Input source toggle skipped — fewer than 2 sources available")
+            return false
+        }
 
-        if performToggle(sources: sources, idMap: idMap) { return }
+        if performToggle(sources: sources, idMap: idMap) { return true }
 
         // Toggle failed — cached sources likely stale. Invalidate and retry once.
-        guard let freshSources = rebuildSourceCache(), freshSources.count >= 2 else { return }
+        guard let freshSources = rebuildSourceCache(), freshSources.count >= 2 else {
+            NSLog("GestureKeys: Input source toggle failed — cache rebuild returned no sources")
+            return false
+        }
         os_unfair_lock_lock(&inputSourceLock)
         let freshMap = sourceIdToIndex
         os_unfair_lock_unlock(&inputSourceLock)
-        _ = performToggle(sources: freshSources, idMap: freshMap)
+        if !performToggle(sources: freshSources, idMap: freshMap) {
+            NSLog("GestureKeys: Input source toggle failed after retry")
+            return false
+        }
+        return true
     }
 
     // MARK: - Synthesis Timestamp (for palm rejection)

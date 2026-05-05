@@ -10,16 +10,23 @@ struct SettingsView: View {
     @State private var launchAtLogin = LaunchAtLoginHelper.isEnabled
     @State private var showingAppOverrides = false
     @State private var searchText = ""
-    @State private var expandedCategories: Set<String> = Set(GestureConfig.categories.map(\.id))
+    @State private var debouncedSearch = ""
+    @State private var expandedCategories: Set<String> = {
+        if let saved = UserDefaults.standard.array(forKey: "expandedCategories") as? [String] {
+            return Set(saved)
+        }
+        return Set(GestureConfig.categories.map(\.id))  // Default: all expanded
+    }()
 
     private let permissionTimer = Timer.publish(every: 3, on: .main, in: .common).autoconnect()
 
     private var filteredCategories: [GestureConfig.Category] {
-        if searchText.isEmpty { return GestureConfig.categories }
+        if debouncedSearch.isEmpty { return GestureConfig.categories }
         return GestureConfig.categories.compactMap { category in
             let filtered = category.gestures.filter {
-                $0.name.localizedCaseInsensitiveContains(searchText) ||
-                $0.action.localizedCaseInsensitiveContains(searchText)
+                $0.name.localizedCaseInsensitiveContains(debouncedSearch) ||
+                $0.action.localizedCaseInsensitiveContains(debouncedSearch) ||
+                config.actionFor($0.id).displayName.localizedCaseInsensitiveContains(debouncedSearch)
             }
             if filtered.isEmpty { return nil }
             return GestureConfig.Category(id: category.id, title: category.title, icon: category.icon, gestures: filtered)
@@ -40,11 +47,32 @@ struct SettingsView: View {
                     ForEach(filteredCategories) { category in
                         section(category: category)
                     }
+                    if filteredCategories.isEmpty && !debouncedSearch.isEmpty {
+                        VStack(spacing: 8) {
+                            Image(systemName: "magnifyingglass")
+                                .font(.title2)
+                                .foregroundColor(.secondary.opacity(0.4))
+                            Text("'\(debouncedSearch)' 검색 결과가 없습니다")
+                                .font(.callout)
+                                .foregroundColor(.secondary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 24)
+                    }
+                    macroSection
+                    tipsSection
                 }
                 .padding(20)
             }
         }
         .frame(minWidth: 460, minHeight: 560)
+        .onChange(of: searchText) { _, newValue in
+            // Debounce search for Korean IME composition — prevents flickering
+            // during intermediate character composition (ㅂ → 복 → 복사)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                if searchText == newValue { debouncedSearch = newValue }
+            }
+        }
         .onReceive(permissionTimer) { _ in
             hasPermission = AXIsProcessTrusted()
         }
@@ -55,7 +83,7 @@ struct SettingsView: View {
             HStack(spacing: 6) {
                 Image(systemName: "gearshape")
                     .foregroundColor(.secondary)
-                    .font(.subheadline)
+                    .font(.body)
                 Text("일반")
                     .font(.headline)
                     .foregroundColor(.secondary)
@@ -66,7 +94,7 @@ struct SettingsView: View {
                     Toggle("", isOn: $launchAtLogin)
                         .toggleStyle(.switch)
                         .controlSize(.small)
-                        .onChange(of: launchAtLogin) { newValue in
+                        .onChange(of: launchAtLogin) { _, newValue in
                             LaunchAtLoginHelper.setEnabled(newValue)
                             launchAtLogin = LaunchAtLoginHelper.isEnabled
                         }
@@ -164,7 +192,7 @@ struct SettingsView: View {
                             Spacer().frame(width: 36)
                             Text("키보드 입력 후 제스처를 억제하는 시간 (기본 0.3초)")
                                 .font(.caption2)
-                                .foregroundColor(.secondary.opacity(0.7))
+                                .foregroundColor(.secondary)
                         }
                     }
                     .padding(.horizontal, 12)
@@ -242,12 +270,109 @@ struct SettingsView: View {
         }
     }
 
+    @State private var showingMacroEditor = false
+
+    private var macroSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "bolt.horizontal")
+                    .foregroundColor(.secondary)
+                    .font(.body)
+                Text("매크로")
+                    .font(.headline)
+                    .foregroundColor(.secondary)
+                Spacer()
+                Button(action: { showingMacroEditor = true }) {
+                    Image(systemName: "plus")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderless)
+                .help("새 매크로 추가")
+            }
+
+            VStack(spacing: 0) {
+                if config.macros.isEmpty {
+                    VStack(spacing: 6) {
+                        Image(systemName: "bolt.horizontal")
+                            .font(.title2)
+                            .foregroundColor(.secondary.opacity(0.4))
+                        Text("등록된 매크로가 없습니다")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text("예: 3손가락 길게 → 3손가락 더블탭 = 복사 + 붙여넣기")
+                            .font(.caption2)
+                            .foregroundColor(.secondary.opacity(0.7))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                } else {
+                    ForEach(Array(config.macros.enumerated()), id: \.element.id) { index, macro in
+                        MacroRowView(macro: macro, config: config)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                        if index < config.macros.count - 1 {
+                            Divider().padding(.leading, 12)
+                        }
+                    }
+                }
+            }
+            .background(Color(nsColor: .controlBackgroundColor))
+            .cornerRadius(8)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+            )
+        }
+        .sheet(isPresented: $showingMacroEditor) {
+            MacroEditorView(config: config)
+        }
+    }
+
+    private var tipsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "lightbulb")
+                    .foregroundColor(.secondary)
+                    .font(.body)
+                Text("팁")
+                    .font(.headline)
+                    .foregroundColor(.secondary)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                tipRow(icon: "rectangle.split.2x1", text: "윈도우 스냅: 제스처 액션을 \"윈도우 왼쪽 절반\" 등으로 변경하면 창을 빠르게 정렬할 수 있습니다 (macOS 15+)")
+                tipRow(icon: "computermouse", text: "미들클릭: 브라우저에서 탭 닫기, 새 탭으로 링크 열기 등에 활용할 수 있습니다")
+                tipRow(icon: "terminal", text: "셸 명령: 어떤 제스처든 셸 명령이나 Apple Shortcuts에 연결할 수 있습니다")
+                tipRow(icon: "keyboard", text: "Shift + 밝기 키: 키보드 백라이트를 조절합니다 (항상 활성)")
+                tipRow(icon: "hand.draw", text: "제스처 테스트: 메뉴바에서 \"제스처 테스트\"로 인식 상태를 실시간 확인할 수 있습니다")
+            }
+            .padding(12)
+            .background(Color(nsColor: .controlBackgroundColor))
+            .cornerRadius(8)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+            )
+        }
+    }
+
+    private func tipRow(icon: String, text: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon)
+                .foregroundColor(.accentColor)
+                .frame(width: 20)
+                .font(.callout)
+            Text(text)
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+
     private var sensitivitySection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Image(systemName: "slider.horizontal.3")
                     .foregroundColor(.secondary)
-                    .font(.subheadline)
+                    .font(.body)
                 Text("감도")
                     .font(.headline)
                     .foregroundColor(.secondary)
@@ -285,7 +410,7 @@ struct SettingsView: View {
     }
 
     private func sensitivitySlider(label: String, value: Binding<Double>, description: String, leftLabel: String, rightLabel: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(label)
                     .font(.body)
@@ -315,7 +440,7 @@ struct SettingsView: View {
             }
             Text(description)
                 .font(.caption2)
-                .foregroundColor(.secondary.opacity(0.7))
+                .foregroundColor(.secondary)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -325,9 +450,15 @@ struct SettingsView: View {
         HStack(spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundColor(.orange)
-            Text("접근성 권한이 필요합니다")
-                .font(.callout)
-                .fontWeight(.medium)
+                .font(.body)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("접근성 권한이 필요합니다")
+                    .font(.callout)
+                    .fontWeight(.medium)
+                Text("제스처 인식을 위해 시스템 설정에서 허용해주세요")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
             Spacer()
             Button("시스템 설정 열기") {
                 if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
@@ -337,7 +468,7 @@ struct SettingsView: View {
             .controlSize(.small)
         }
         .padding(12)
-        .background(Color.orange.opacity(0.1))
+        .background(Color.orange.opacity(0.12))
     }
 
     private var header: some View {
@@ -348,34 +479,81 @@ struct SettingsView: View {
                 Text("GestureKeys 설정")
                     .font(.title3)
                     .fontWeight(.semibold)
+                Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .padding(.top, 4)
                 Spacer()
                 Button(action: exportSettings) {
                     Image(systemName: "square.and.arrow.up")
+                        .foregroundColor(.secondary)
                 }
                 .buttonStyle(.borderless)
                 .help("설정 내보내기")
 
                 Button(action: importSettings) {
                     Image(systemName: "square.and.arrow.down")
+                        .foregroundColor(.secondary)
                 }
                 .buttonStyle(.borderless)
                 .help("설정 가져오기")
 
                 Menu("프리셋") {
-                    Button("기본") { applyPreset(.default) }
-                    Button("최소") { applyPreset(.minimal) }
-                    Button("전체") { applyPreset(.all) }
+                    Button {
+                        applyPreset(.default)
+                    } label: {
+                        VStack(alignment: .leading) {
+                            Text("기본")
+                            Text("권장 설정 — 탐색, 편집, 창 관리 제스처")
+                                .font(.caption)
+                        }
+                    }
+                    Button {
+                        applyPreset(.minimal)
+                    } label: {
+                        VStack(alignment: .leading) {
+                            Text("최소")
+                            Text("필수 제스처만 — 가장 간결한 설정")
+                                .font(.caption)
+                        }
+                    }
+                    Button {
+                        applyPreset(.all)
+                    } label: {
+                        VStack(alignment: .leading) {
+                            Text("전체")
+                            Text("모든 제스처 활성화 — 파워 유저용")
+                                .font(.caption)
+                        }
+                    }
                 }
                 .controlSize(.small)
             }
             HStack {
-                TextField("제스처 검색...", text: $searchText)
-                    .textFieldStyle(.roundedBorder)
-                    .controlSize(.small)
-                Spacer()
-                Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+                HStack(spacing: 4) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundColor(.secondary)
+                        .font(.caption)
+                    TextField("제스처 검색...", text: $searchText)
+                        .textFieldStyle(.plain)
+                        .controlSize(.small)
+                    if !searchText.isEmpty {
+                        Button(action: { searchText = "" }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.secondary)
+                                .font(.caption)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color(nsColor: .controlBackgroundColor))
+                .cornerRadius(6)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                )
             }
         }
         .padding(16)
@@ -407,16 +585,17 @@ struct SettingsView: View {
                     } else {
                         expandedCategories.insert(category.id)
                     }
+                    UserDefaults.standard.set(Array(expandedCategories), forKey: "expandedCategories")
                 }
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "chevron.right")
-                        .font(.caption2.weight(.bold))
+                        .font(.caption.weight(.bold))
                         .foregroundColor(.secondary)
                         .rotationEffect(.degrees(isExpanded ? 90 : 0))
                     Image(systemName: category.icon)
                         .foregroundColor(.secondary)
-                        .font(.subheadline)
+                        .font(.body)
                     Text(category.title)
                         .font(.headline)
                         .foregroundColor(.secondary)
@@ -450,7 +629,7 @@ struct SettingsView: View {
                     ForEach(Array(category.gestures.enumerated()), id: \.element.id) { index, gesture in
                         gestureRow(gesture)
                         if index < category.gestures.count - 1 {
-                            Divider().padding(.leading, 44)
+                            Divider().padding(.leading, 12)
                         }
                     }
                 }
@@ -486,16 +665,42 @@ struct SettingsView: View {
             dict["zones.enabled.\(info.id)"] = defaults.object(forKey: "zones.enabled.\(info.id)")
             dict["zones.\(info.id).left"] = defaults.object(forKey: "zones.\(info.id).left")
             dict["zones.\(info.id).right"] = defaults.object(forKey: "zones.\(info.id).right")
+            dict["shellCommand.\(info.id)"] = defaults.object(forKey: "shellCommand.\(info.id)")
+            dict["customKey.\(info.id).keyCode"] = defaults.object(forKey: "customKey.\(info.id).keyCode")
+            dict["customKey.\(info.id).flags"] = defaults.object(forKey: "customKey.\(info.id).flags")
         }
         for key in ["hudEnabled", "hapticEnabled", "cooldownEnabled", "capsLockInputSwitch",
                      "tapSpeedMultiplier", "swipeThresholdMultiplier", "moveThresholdMultiplier",
-                     "typingSuppressionEnabled", "typingSuppressionWindow"] {
-            dict[key] = defaults.object(forKey: key)
+                     "typingSuppressionEnabled", "typingSuppressionWindow",
+                     "macros"] {
+            if key == "macros" {
+                if let data = defaults.data(forKey: key),
+                   let object = try? JSONSerialization.jsonObject(with: data) {
+                    dict[key] = object
+                }
+            } else {
+                dict[key] = defaults.object(forKey: key)
+            }
         }
         // Filter nil values
         let filtered = dict.compactMapValues { $0 }
-        guard let data = try? JSONSerialization.data(withJSONObject: filtered, options: [.prettyPrinted, .sortedKeys]) else { return }
-        try? data.write(to: url)
+        do {
+            let data = try JSONSerialization.data(withJSONObject: filtered, options: [.prettyPrinted, .sortedKeys])
+            try data.write(to: url, options: .atomic)
+            let alert = NSAlert()
+            alert.messageText = "내보내기 완료"
+            alert.informativeText = "설정이 저장되었습니다."
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "확인")
+            alert.runModal()
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "내보내기 실패"
+            alert.informativeText = error.localizedDescription
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "확인")
+            alert.runModal()
+        }
     }
 
     private func importSettings() {
@@ -504,15 +709,79 @@ struct SettingsView: View {
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         guard let data = try? Data(contentsOf: url),
-              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            let alert = NSAlert()
+            alert.messageText = "불러오기 실패"
+            alert.informativeText = "올바른 JSON 파일이 아닙니다."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "확인")
+            alert.runModal()
+            return
+        }
+
+        // Whitelist: only import keys that exportSettings() would produce.
+        // Prevents arbitrary UserDefaults injection from malformed JSON.
+        var allowedKeys = Set<String>()
+        for info in GestureConfig.all {
+            let id = info.id
+            for prefix in ["gesture.", "action.", "cooldown.", "shortcut.",
+                           "zones.enabled.", "shellCommand."] {
+                allowedKeys.insert("\(prefix)\(id)")
+            }
+            allowedKeys.insert("zones.\(id).left")
+            allowedKeys.insert("zones.\(id).right")
+            allowedKeys.insert("customKey.\(id).keyCode")
+            allowedKeys.insert("customKey.\(id).flags")
+        }
+        for key in ["hudEnabled", "hapticEnabled", "cooldownEnabled", "capsLockInputSwitch",
+                     "tapSpeedMultiplier", "swipeThresholdMultiplier", "moveThresholdMultiplier",
+                     "typingSuppressionEnabled", "typingSuppressionWindow",
+                     "macros"] {
+            allowedKeys.insert(key)
+        }
 
         let defaults = UserDefaults.standard
-        for (key, value) in dict {
-            defaults.set(value, forKey: key)
+        var importedCount = 0
+        for (key, value) in dict where allowedKeys.contains(key) {
+            if key == "macros" {
+                guard JSONSerialization.isValidJSONObject(value),
+                      let data = try? JSONSerialization.data(withJSONObject: value) else {
+                    continue
+                }
+                defaults.set(data, forKey: key)
+                importedCount += 1
+            } else if isImportablePropertyListValue(value) {
+                defaults.set(value, forKey: key)
+                importedCount += 1
+            }
         }
         config.reloadFromDefaults()
+
+        let alert = NSAlert()
+        alert.messageText = "불러오기 완료"
+        alert.informativeText = "\(importedCount)개 설정을 불러왔습니다."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "확인")
+        alert.runModal()
+    }
+
+    private func isImportablePropertyListValue(_ value: Any) -> Bool {
+        switch value {
+        case is String, is NSNumber, is Date, is Data:
+            return true
+        case let array as [Any]:
+            return array.allSatisfy { isImportablePropertyListValue($0) }
+        case let dict as [String: Any]:
+            return dict.values.allSatisfy { isImportablePropertyListValue($0) }
+        default:
+            return false
+        }
     }
 }
+
+private let twoFingerSwipeIds: Set<String> = [
+    "twoFingerSwipeRight", "twoFingerSwipeLeft",
+]
 
 private let threeFingerSwipeIds: Set<String> = [
     "threeFingerSwipeRight", "threeFingerSwipeLeft",
@@ -567,14 +836,37 @@ private struct GestureRowView: View {
                 .controlSize(.small)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
+                let currentAction = config.actionFor(gesture.id)
+                if currentAction != .shortcut && currentAction != .custom && currentAction != .shellCommand {
+                    Button(action: { currentAction.execute() }) {
+                        Image(systemName: "play.fill")
+                            .font(.caption2)
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundColor(.secondary)
+                    .help("이 액션 테스트")
+                }
+
                 if let defaultAction = KeySynthesizer.defaultActions[gesture.id],
-                   config.actionFor(gesture.id) != defaultAction {
+                   currentAction != defaultAction {
                     Button("초기화") {
                         config.setAction(gesture.id, defaultAction)
                     }
                     .controlSize(.mini)
                     .buttonStyle(.borderless)
                     .foregroundColor(.accentColor)
+                }
+            }
+
+            if twoFingerSwipeIds.contains(gesture.id) && config.uiIsEnabled(gesture.id) {
+                HStack(spacing: 6) {
+                    Spacer().frame(width: 32)
+                    Image(systemName: "info.circle")
+                        .font(.caption2)
+                        .foregroundColor(.blue)
+                    Text("시스템 설정 → 트랙패드 → 기타 제스처의 '페이지 사이를 쓸어넘기기'가 켜져 있으면 이중 동작이 발생할 수 있습니다.")
+                        .font(.caption2)
+                        .foregroundColor(.blue)
                 }
             }
 
@@ -629,9 +921,18 @@ private struct GestureRowView: View {
                     CustomKeySettingView(gestureId: gesture.id)
                 }
             }
+
+            if config.actionFor(gesture.id) == .shellCommand {
+                HStack(spacing: 12) {
+                    Spacer().frame(width: 32)
+                    ShellCommandView(gestureId: gesture.id)
+                }
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+        .opacity(config.uiIsEnabled(gesture.id) ? 1.0 : 0.5)
+        .animation(.easeInOut(duration: 0.15), value: config.uiIsEnabled(gesture.id))
     }
 }
 
@@ -657,10 +958,13 @@ private struct ZoneConfigView: View {
             if config.zonesEnabled(for: gestureId) {
                 HStack(spacing: 12) {
                     Spacer().frame(width: 44)
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 6) {
                         zonePicker(zone: .left, label: "왼쪽")
                         zonePicker(zone: .right, label: "오른쪽")
                     }
+                    .padding(8)
+                    .background(Color.gray.opacity(0.05))
+                    .cornerRadius(4)
                 }
             }
         }
@@ -699,20 +1003,54 @@ private struct ShortcutNameView: View {
                 .controlSize(.small)
                 .onAppear { name = config.shortcutName(for: gestureId) ?? "" }
                 .onSubmit { config.setShortcutName(for: gestureId, name: name) }
-                .onChange(of: name) { newValue in
+                .onChange(of: name) { _, newValue in
                     config.setShortcutName(for: gestureId, name: newValue)
                 }
 
             Button(action: {
                 KeySynthesizer.executeShortcut(gestureId: gestureId)
             }) {
-                Image(systemName: "play.circle")
-                    .foregroundColor(.accentColor)
+                Image(systemName: "play.fill")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.borderless)
             .help("Shortcut 테스트 실행")
             .disabled(name.isEmpty)
         }
+    }
+}
+
+// MARK: - Shell Command View
+
+private struct ShellCommandView: View {
+    let gestureId: String
+    @State private var command: String = ""
+
+    var body: some View {
+        HStack(spacing: 8) {
+            TextField("셸 명령 (예: open -a Calculator)", text: $command)
+                .textFieldStyle(.roundedBorder)
+                .controlSize(.small)
+                .onAppear { command = UserDefaults.standard.string(forKey: "shellCommand.\(gestureId)") ?? "" }
+                .onSubmit { save() }
+                .onChange(of: command) { _, _ in save() }
+
+            Button(action: {
+                KeySynthesizer.executeShellCommand(gestureId: gestureId)
+            }) {
+                Image(systemName: "play.fill")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.borderless)
+            .help("셸 명령 테스트 실행")
+            .disabled(command.isEmpty)
+        }
+    }
+
+    private func save() {
+        UserDefaults.standard.set(command, forKey: "shellCommand.\(gestureId)")
     }
 }
 
@@ -729,9 +1067,32 @@ struct AppOverrideView: View {
                 .font(.title3)
                 .fontWeight(.semibold)
 
-            Text("특정 앱에서 비활성화할 제스처를 선택하세요.")
+            Text("앱별로 제스처를 끄거나 다른 액션으로 변경할 수 있습니다.")
                 .font(.callout)
                 .foregroundColor(.secondary)
+
+            // Quick add: show the last active app for one-click addition
+            if let lastBundleId = GestureConfig.shared.lastExternalBundleId,
+               config.appOverrides[lastBundleId] == nil {
+                HStack(spacing: 8) {
+                    if let icon = appIcon(for: lastBundleId) {
+                        Image(nsImage: icon)
+                            .resizable()
+                            .frame(width: 20, height: 20)
+                    }
+                    Text(lastBundleId)
+                        .font(.callout)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Button("이 앱 추가") {
+                        addBundleId(lastBundleId)
+                    }
+                    .controlSize(.small)
+                }
+                .padding(8)
+                .background(Color.accentColor.opacity(0.08))
+                .cornerRadius(6)
+            }
 
             HStack {
                 TextField("Bundle ID (예: com.apple.Safari)", text: $newBundleId)
@@ -740,21 +1101,26 @@ struct AppOverrideView: View {
                     addBundleId(newBundleId)
                 }
                 .disabled(newBundleId.trimmingCharacters(in: .whitespaces).isEmpty)
-                Button("이전 앱") {
-                    if let bundleId = GestureConfig.shared.lastExternalBundleId {
-                        addBundleId(bundleId)
-                    }
+                Button("앱 선택...") {
+                    pickApp()
                 }
                 .controlSize(.small)
-                .help("GestureKeys 실행 전 사용 중이던 앱의 Bundle ID를 자동 입력합니다")
-                .disabled(GestureConfig.shared.lastExternalBundleId == nil)
+                .help("Applications 폴더에서 앱을 선택합니다")
             }
 
             if config.overriddenBundleIds.isEmpty {
-                Text("등록된 앱이 없습니다.")
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 20)
+                VStack(spacing: 8) {
+                    Image(systemName: "app.dashed")
+                        .font(.title)
+                        .foregroundColor(.secondary.opacity(0.4))
+                    Text("등록된 앱이 없습니다")
+                        .foregroundColor(.secondary)
+                    Text("Bundle ID를 입력하거나 \"이전 앱\" 버튼을 사용하세요")
+                        .font(.caption)
+                        .foregroundColor(.secondary.opacity(0.7))
+                }
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.vertical, 24)
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
@@ -771,7 +1137,20 @@ struct AppOverrideView: View {
             }
         }
         .padding(20)
-        .frame(width: 420, height: 400)
+        .frame(width: 520, height: 500)
+    }
+
+    private func pickApp() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.application]
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.message = "제스처를 설정할 앱을 선택하세요"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if let bundle = Bundle(url: url), let bundleId = bundle.bundleIdentifier {
+            addBundleId(bundleId)
+        }
     }
 
     private func addBundleId(_ raw: String) {
@@ -788,33 +1167,155 @@ struct AppOverrideView: View {
     private func appSection(bundleId: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
+                if let appIcon = appIcon(for: bundleId) {
+                    Image(nsImage: appIcon)
+                        .resizable()
+                        .frame(width: 20, height: 20)
+                }
                 Text(bundleId)
                     .font(.callout)
                     .fontWeight(.medium)
                 Spacer()
                 Button(action: { config.removeAppOverride(bundleId: bundleId) }) {
                     Image(systemName: "trash")
-                        .foregroundColor(.red)
+                        .foregroundColor(.red.opacity(0.7))
                         .font(.caption)
                 }
                 .buttonStyle(.plain)
+                .help("이 앱 설정 삭제")
             }
 
-            let allGestures = GestureConfig.all
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 160))], spacing: 4) {
-                ForEach(allGestures) { gesture in
-                    Toggle(gesture.name, isOn: Binding(
-                        get: { config.isGestureDisabledForApp(gesture.id, bundleId: bundleId) },
-                        set: { config.setGestureDisabledForApp(gesture.id, bundleId: bundleId, disabled: $0) }
-                    ))
-                    .controlSize(.small)
-                    .font(.caption)
+            VStack(spacing: 2) {
+                ForEach(GestureConfig.categories) { category in
+                    Text(category.title)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .padding(.top, 6)
+                        .padding(.leading, 4)
+                    ForEach(category.gestures) { gesture in
+                    HStack(spacing: 6) {
+                        Toggle("", isOn: Binding(
+                            get: { !config.isGestureDisabledForApp(gesture.id, bundleId: bundleId) },
+                            set: { config.setGestureDisabledForApp(gesture.id, bundleId: bundleId, disabled: !$0) }
+                        ))
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .frame(width: 32)
+
+                        Text(gesture.name)
+                            .font(.caption)
+                            .frame(width: 120, alignment: .leading)
+                            .lineLimit(1)
+
+                        Picker("", selection: Binding(
+                            get: {
+                                config.appActionOverride(for: gesture.id, bundleId: bundleId) ?? config.actionFor(gesture.id)
+                            },
+                            set: { newAction in
+                                if newAction == config.actionFor(gesture.id) {
+                                    config.setAppActionOverride(for: gesture.id, bundleId: bundleId, action: nil)
+                                } else {
+                                    config.setAppActionOverride(for: gesture.id, bundleId: bundleId, action: newAction)
+                                }
+                            }
+                        )) {
+                            ForEach(KeySynthesizer.Action.allCases) { action in
+                                Text(action.displayName).tag(action)
+                            }
+                        }
+                        .controlSize(.mini)
+                        .frame(maxWidth: .infinity)
+                    }
+                    }
                 }
             }
         }
         .padding(8)
         .background(Color(nsColor: .controlBackgroundColor))
         .cornerRadius(6)
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        )
+    }
+
+    private func appIcon(for bundleId: String) -> NSImage? {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) else { return nil }
+        return NSWorkspace.shared.icon(forFile: url.path)
+    }
+}
+
+// MARK: - Macro Row View
+
+private struct MacroRowView: View {
+    let macro: MacroDefinition
+    @ObservedObject var config: GestureConfig
+    @State private var showingEditor = false
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Toggle("", isOn: Binding(
+                get: { macro.isEnabled },
+                set: { newValue in
+                    var updated = macro
+                    updated.isEnabled = newValue
+                    config.updateMacro(updated)
+                }
+            ))
+            .toggleStyle(.switch)
+            .controlSize(.small)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(macro.name.isEmpty ? "이름 없는 매크로" : macro.name)
+                    .font(.body)
+                Text(triggerSummary)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                if hasDisabledTrigger {
+                    HStack(spacing: 4) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.caption2)
+                        Text("트리거 제스처 비활성화됨")
+                            .font(.caption2)
+                    }
+                    .foregroundColor(.orange)
+                }
+            }
+
+            Spacer()
+
+            Text("\(macro.resultActions.count)개 액션")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+
+            Button("편집") { showingEditor = true }
+                .controlSize(.mini)
+                .buttonStyle(.borderless)
+                .foregroundColor(.accentColor)
+
+            Button(action: { config.deleteMacro(id: macro.id) }) {
+                Image(systemName: "trash")
+                    .foregroundColor(.red.opacity(0.7))
+                    .font(.caption)
+            }
+            .buttonStyle(.plain)
+        }
+        .opacity(macro.isEnabled ? 1.0 : 0.5)
+        .sheet(isPresented: $showingEditor) {
+            MacroEditorView(macro: macro, config: config)
+        }
+    }
+
+    private var triggerSummary: String {
+        macro.triggerGestures
+            .compactMap { GestureConfig.info(for: $0)?.name }
+            .joined(separator: " → ")
+    }
+
+    private var hasDisabledTrigger: Bool {
+        macro.isEnabled && macro.triggerGestures.contains { !config.uiIsEnabled($0) }
     }
 }
 
@@ -839,7 +1340,9 @@ final class SettingsWindowController {
         window.title = "GestureKeys 설정"
         window.styleMask = [.titled, .closable, .resizable]
         window.setFrameAutosaveName("SettingsWindow")
-        window.center()
+        if !window.setFrameUsingName("SettingsWindow") {
+            window.center()  // Only center on first launch (no saved frame)
+        }
         window.isReleasedWhenClosed = false
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)

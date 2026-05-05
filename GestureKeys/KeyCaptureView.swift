@@ -63,7 +63,12 @@ final class KeyCaptureNSView: NSView {
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         label.stringValue = "키를 누르세요..."
+        label.textColor = .controlAccentColor
+        let animation = CABasicAnimation(keyPath: "borderColor")
+        animation.duration = 0.15
+        layer?.add(animation, forKey: "borderColor")
         layer?.borderColor = NSColor.controlAccentColor.cgColor
+        layer?.borderWidth = 2
     }
 
     override func keyDown(with event: NSEvent) {
@@ -71,11 +76,15 @@ final class KeyCaptureNSView: NSView {
         onKeyCapture?(event.keyCode, flags)
 
         label.stringValue = formatKey(keyCode: event.keyCode, flags: flags)
+        label.textColor = .labelColor
         layer?.borderColor = NSColor.separatorColor.cgColor
+        layer?.borderWidth = 1
     }
 
     override func resignFirstResponder() -> Bool {
+        label.textColor = .secondaryLabelColor
         layer?.borderColor = NSColor.separatorColor.cgColor
+        layer?.borderWidth = 1
         return super.resignFirstResponder()
     }
 

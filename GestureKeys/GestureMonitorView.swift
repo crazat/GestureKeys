@@ -23,9 +23,14 @@ struct GestureMonitorView: View {
                     .font(.title3)
                     .fontWeight(.semibold)
                 Spacer()
-                Circle()
-                    .fill(monitor.isActive ? Color.green : Color.gray)
-                    .frame(width: 8, height: 8)
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(monitor.isActive ? Color.green : Color.gray)
+                        .frame(width: 8, height: 8)
+                    Text(monitor.isActive ? "활성" : "비활성")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             }
 
             Divider()
@@ -33,12 +38,17 @@ struct GestureMonitorView: View {
             // Touch count
             HStack {
                 Text("활성 터치:")
+                    .font(.callout)
                     .foregroundColor(.secondary)
                 Text("\(monitor.activeTouchCount)")
-                    .fontWeight(.medium)
-                    .monospacedDigit()
+                    .font(.title3.bold().monospacedDigit())
+                    .foregroundColor(monitor.activeTouchCount > 0 ? .accentColor : .secondary)
                 Spacer()
             }
+            .padding(8)
+            .background(Color.accentColor.opacity(monitor.activeTouchCount > 0 ? 0.08 : 0))
+            .cornerRadius(6)
+            .animation(.easeInOut(duration: 0.15), value: monitor.activeTouchCount)
 
             // Last recognized gesture
             if let last = monitor.lastGesture {
@@ -82,9 +92,16 @@ struct GestureMonitorView: View {
                                     .id(entry.id)
                             }
                         }
+                        .padding(6)
                     }
                     .frame(maxHeight: 150)
-                    .onChange(of: monitor.log.count) { _ in
+                    .background(Color.black.opacity(0.03))
+                    .cornerRadius(4)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                    )
+                    .onChange(of: monitor.log.count) { _, _ in
                         if let last = monitor.log.last {
                             proxy.scrollTo(last.id, anchor: .bottom)
                         }
@@ -167,6 +184,10 @@ struct HeatmapView: View {
         }
         .background(Color.black.opacity(0.05))
         .cornerRadius(4)
+        .overlay(
+            RoundedRectangle(cornerRadius: 4)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        )
     }
 
     /// Maps intensity (0–1) to blue→yellow→red gradient.
@@ -334,7 +355,7 @@ final class GestureMonitorWindowController {
         window.styleMask = [.titled, .closable]
         window.level = .floating
         window.setFrameAutosaveName("GestureMonitorWindow")
-        window.center()
+        if !window.setFrameUsingName("GestureMonitorWindow") { window.center() }
         window.isReleasedWhenClosed = false
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)

@@ -30,6 +30,10 @@ final class GestureStats {
     private var lock = os_unfair_lock()
     private var isDirty = false
 
+    /// Recent gesture IDs (ring buffer, max 5). Protected by lock.
+    private var recentGestures: [String] = []
+    private let maxRecent = 5
+
     private lazy var dateFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
@@ -47,6 +51,10 @@ final class GestureStats {
     /// Persistence is batched — writes are flushed after a 5-second debounce or on app termination.
     func record(gestureId: String) {
         os_unfair_lock_lock(&lock)
+
+        // Track recent gestures (ring buffer)
+        recentGestures.append(gestureId)
+        if recentGestures.count > maxRecent { recentGestures.removeFirst() }
 
         let today = dateFormatter.string(from: Date())
 
@@ -119,6 +127,28 @@ final class GestureStats {
     /// Total fire count across all gestures for the last N days.
     func totalFires(days: Int = 7) -> Int {
         totals(days: days).values.reduce(0, +)
+    }
+
+    /// Returns the most recent gesture names (up to 5).
+    func recentGestureNames() -> [String] {
+        os_unfair_lock_lock(&lock)
+        let ids = recentGestures
+        os_unfair_lock_unlock(&lock)
+        return ids.reversed().compactMap { GestureConfig.info(for: $0)?.name }
+    }
+
+    /// Number of days that actually have recorded data within the last N days.
+    func daysWithData(days: Int = 7) -> Int {
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
+
+        let cutoffDate = Date().addingTimeInterval(-Double(days) * 86400)
+        var count = 0
+        for record in records {
+            guard let recordDate = dateFormatter.date(from: record.date), recordDate >= cutoffDate else { continue }
+            if !record.counts.isEmpty { count += 1 }
+        }
+        return count
     }
 
     /// Clear all statistics.

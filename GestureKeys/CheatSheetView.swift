@@ -31,7 +31,7 @@ struct CheatSheetView: View {
                 .padding(16)
             }
         }
-        .frame(width: 360, height: 480)
+        .frame(width: 360, height: 540)
     }
 
     private func cheatSection(title: String, icon: String, gestures: [GestureConfig.Info]) -> some View {
@@ -39,7 +39,7 @@ struct CheatSheetView: View {
             HStack(spacing: 6) {
                 Image(systemName: icon)
                     .foregroundColor(.secondary)
-                    .font(.subheadline)
+                    .font(.body)
                 Text(title)
                     .font(.headline)
                     .foregroundColor(.secondary)
@@ -56,7 +56,7 @@ struct CheatSheetView: View {
                             .foregroundColor(.secondary)
                     }
                     .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
+                    .padding(.vertical, 8)
 
                     if index < gestures.count - 1 {
                         Divider().padding(.leading, 12)
@@ -82,6 +82,19 @@ struct CheatSheetView: View {
         let action = config.actionFor(gesture.id)
         if action == .custom {
             return formatCustomKey(gestureId: gesture.id)
+        }
+        if action == .shortcut {
+            if let name = config.shortcutName(for: gesture.id), !name.isEmpty {
+                return "⌘ \(name)"
+            }
+            return "Shortcuts (미설정)"
+        }
+        if action == .shellCommand {
+            if let cmd = UserDefaults.standard.string(forKey: "shellCommand.\(gesture.id)"), !cmd.isEmpty {
+                let display = cmd.count > 20 ? String(cmd.prefix(20)) + "…" : cmd
+                return "$ \(display)"
+            }
+            return "셸 명령 (미설정)"
         }
         return action.displayName
     }
@@ -125,7 +138,7 @@ final class CheatSheetWindowController {
         window.styleMask = [.titled, .closable]
         window.level = .floating
         window.setFrameAutosaveName("CheatSheetWindow")
-        window.center()
+        if !window.setFrameUsingName("CheatSheetWindow") { window.center() }
         window.isReleasedWhenClosed = false
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)

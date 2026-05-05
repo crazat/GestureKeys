@@ -14,8 +14,11 @@ struct StatsView: View {
         VStack(spacing: 0) {
             // Header
             HStack {
+                Image(systemName: "chart.bar.xaxis")
+                    .font(.title2)
                 Text("제스처 통계")
-                    .font(.headline)
+                    .font(.title3)
+                    .fontWeight(.semibold)
                 Spacer()
                 Picker("기간", selection: $selectedDays) {
                     Text("7일").tag(7)
@@ -37,15 +40,16 @@ struct StatsView: View {
 
             if totalFires == 0 {
                 Spacer()
-                VStack(spacing: 8) {
+                VStack(spacing: 10) {
                     Image(systemName: "chart.bar")
-                        .font(.system(size: 40))
-                        .foregroundColor(.secondary)
+                        .font(.system(size: 44))
+                        .foregroundColor(.secondary.opacity(0.4))
                     Text("아직 기록된 제스처가 없습니다")
+                        .font(.body)
                         .foregroundColor(.secondary)
                     Text("제스처를 사용하면 여기에 통계가 표시됩니다")
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(.secondary.opacity(0.7))
                 }
                 Spacer()
             } else {
@@ -77,7 +81,7 @@ struct StatsView: View {
         }
         .frame(width: 480, height: 500)
         .onAppear(perform: refresh)
-        .onChange(of: selectedDays) { _ in refresh() }
+        .onChange(of: selectedDays) { _, _ in refresh() }
     }
 
     private var visibleRecommendations: [GestureStats.Recommendation] {
@@ -88,9 +92,13 @@ struct StatsView: View {
 
     private var recommendationsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("추천")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
+            HStack(spacing: 6) {
+                Image(systemName: "lightbulb")
+                    .foregroundColor(.secondary)
+                Text("추천")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
 
             ForEach(visibleRecommendations) { rec in
                 HStack(spacing: 8) {
@@ -108,6 +116,17 @@ struct StatsView: View {
 
                     Spacer()
 
+                    if rec.type == .unused {
+                        Button("끄기") {
+                            GestureConfig.shared.setEnabled(rec.gestureId, false)
+                            dismissedRecommendations.insert(rec.id)
+                            refresh()
+                        }
+                        .controlSize(.mini)
+                        .buttonStyle(.borderless)
+                        .foregroundColor(.orange)
+                    }
+
                     Button(action: { dismissedRecommendations.insert(rec.id) }) {
                         Image(systemName: "xmark")
                             .font(.caption2)
@@ -116,7 +135,7 @@ struct StatsView: View {
                     .buttonStyle(.plain)
                 }
                 .padding(8)
-                .background(rec.type == .unused ? Color.orange.opacity(0.1) : Color.blue.opacity(0.1))
+                .background(rec.type == .unused ? Color.orange.opacity(0.15) : Color.blue.opacity(0.15))
                 .cornerRadius(6)
             }
         }
@@ -126,15 +145,19 @@ struct StatsView: View {
         HStack(spacing: 24) {
             StatCard(title: "총 사용 횟수", value: "\(totalFires)", icon: "hand.tap")
             StatCard(title: "활성 제스처", value: "\(totals.count)", icon: "rectangle.grid.2x2")
-            StatCard(title: "일 평균", value: "\(totalFires / max(selectedDays, 1))", icon: "chart.line.uptrend.xyaxis")
+            StatCard(title: "일 평균", value: "\(totalFires / max(GestureStats.shared.daysWithData(days: selectedDays), 1))", icon: "chart.line.uptrend.xyaxis")
         }
     }
 
     private var topGesturesSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("가장 많이 사용한 제스처")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
+            HStack(spacing: 6) {
+                Image(systemName: "trophy")
+                    .foregroundColor(.secondary)
+                Text("가장 많이 사용한 제스처")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
 
             let maxCount = topGestures.first?.count ?? 1
 
@@ -146,16 +169,23 @@ struct StatsView: View {
                         .lineLimit(1)
 
                     GeometryReader { geo in
-                        RoundedRectangle(cornerRadius: 3)
-                            .fill(barColor(for: item.gestureId))
-                            .frame(width: geo.size.width * CGFloat(item.count) / CGFloat(max(maxCount, 1)))
+                        let color = barColor(for: item.gestureId)
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(
+                                LinearGradient(
+                                    colors: [color, color.opacity(0.7)],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .frame(width: max(geo.size.width * CGFloat(item.count) / CGFloat(max(maxCount, 1)), 4))
                     }
-                    .frame(height: 18)
+                    .frame(height: 20)
 
                     Text("\(item.count)")
                         .font(.caption.monospacedDigit())
                         .foregroundColor(.secondary)
-                        .frame(width: 40, alignment: .trailing)
+                        .frame(width: 48, alignment: .trailing)
                 }
             }
         }
@@ -163,23 +193,41 @@ struct StatsView: View {
 
     private var allGesturesSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("전체 제스처 사용 내역")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
+            HStack(spacing: 6) {
+                Image(systemName: "list.number")
+                    .foregroundColor(.secondary)
+                Text("전체 제스처 사용 내역")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
 
             let sorted = totals.sorted { $0.value > $1.value }
 
-            ForEach(sorted, id: \.key) { gestureId, count in
-                HStack {
-                    Text(gestureName(for: gestureId))
-                        .font(.caption)
-                        .lineLimit(1)
-                    Spacer()
-                    Text("\(count)회")
-                        .font(.caption.monospacedDigit())
-                        .foregroundColor(.secondary)
+            VStack(spacing: 0) {
+                ForEach(Array(sorted.enumerated()), id: \.element.key) { index, item in
+                    HStack {
+                        Text(gestureName(for: item.key))
+                            .font(.caption)
+                            .lineLimit(1)
+                        Spacer()
+                        Text("\(item.value)회")
+                            .font(.caption.monospacedDigit())
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.vertical, 4)
+                    .padding(.horizontal, 8)
+
+                    if index < sorted.count - 1 {
+                        Divider().padding(.leading, 8)
+                    }
                 }
             }
+            .background(Color(nsColor: .controlBackgroundColor))
+            .cornerRadius(6)
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+            )
         }
     }
 
@@ -228,7 +276,7 @@ private struct StatCard: View {
                 .foregroundColor(.secondary)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 8)
+        .padding(.vertical, 12)
         .background(Color.gray.opacity(0.1))
         .cornerRadius(8)
     }
@@ -255,7 +303,7 @@ final class StatsWindowController {
         )
         window.title = "제스처 통계"
         window.setFrameAutosaveName("StatsWindow")
-        window.center()
+        if !window.setFrameUsingName("StatsWindow") { window.center() }
         window.contentView = NSHostingView(rootView: StatsView())
 
         let wc = NSWindowController(window: window)
