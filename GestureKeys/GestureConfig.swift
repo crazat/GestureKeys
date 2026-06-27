@@ -242,6 +242,7 @@ final class GestureConfig: ObservableObject {
         cachedHapticEnabled = UserDefaults.standard.object(forKey: "hapticEnabled") as? Bool ?? true
         cachedCooldownEnabled = UserDefaults.standard.object(forKey: "cooldownEnabled") as? Bool ?? false
         cachedCapsLockInputSwitch = UserDefaults.standard.object(forKey: "capsLockInputSwitch") as? Bool ?? false
+        cachedCapsLockFastSwitch = UserDefaults.standard.object(forKey: "capsLockFastSwitch") as? Bool ?? true
         loadCooldownOverrides()
 
         loadMacros()
@@ -352,11 +353,13 @@ final class GestureConfig: ObservableObject {
         let hapticVal = defaults.object(forKey: "hapticEnabled") as? Bool ?? true
         let cooldownVal = defaults.object(forKey: "cooldownEnabled") as? Bool ?? false
         let capsLockVal = defaults.object(forKey: "capsLockInputSwitch") as? Bool ?? false
+        let capsLockFastVal = defaults.object(forKey: "capsLockFastSwitch") as? Bool ?? true
         os_unfair_lock_lock(&enabledLock)
         cachedHudEnabled = hudVal
         cachedHapticEnabled = hapticVal
         cachedCooldownEnabled = cooldownVal
         cachedCapsLockInputSwitch = capsLockVal
+        cachedCapsLockFastSwitch = capsLockFastVal
         os_unfair_lock_unlock(&enabledLock)
         loadCooldownOverrides()
         refreshCache()
@@ -574,6 +577,7 @@ final class GestureConfig: ObservableObject {
     /// Cached Caps Lock → input source switch flag.
     /// Protected by enabledLock for thread-safe reads from EventTap callback.
     private var cachedCapsLockInputSwitch: Bool = false
+    private var cachedCapsLockFastSwitch: Bool = true
 
     /// When true, Caps Lock key is intercepted and toggles input source instantly (no macOS delay).
     var capsLockInputSwitch: Bool {
@@ -587,6 +591,34 @@ final class GestureConfig: ObservableObject {
             UserDefaults.standard.set(newValue, forKey: "capsLockInputSwitch")
             os_unfair_lock_lock(&enabledLock)
             cachedCapsLockInputSwitch = newValue
+            os_unfair_lock_unlock(&enabledLock)
+            objectWillChange.send()
+        }
+    }
+
+    /// Thread-safe snapshot for hot Caps Lock paths.
+    var capsLockSnapshot: (inputSwitch: Bool, fastSwitch: Bool) {
+        os_unfair_lock_lock(&enabledLock)
+        let inputSwitch = cachedCapsLockInputSwitch
+        let fastSwitch = cachedCapsLockFastSwitch
+        os_unfair_lock_unlock(&enabledLock)
+        return (inputSwitch, fastSwitch)
+    }
+
+    /// When true (and capsLockInputSwitch is on), Caps Lock is captured at the raw HID
+    /// level via IOHIDManager to bypass the ~250ms built-in-keyboard debounce, so fast
+    /// taps register reliably. Requires Input Monitoring permission.
+    var capsLockFastSwitch: Bool {
+        get {
+            os_unfair_lock_lock(&enabledLock)
+            let v = cachedCapsLockFastSwitch
+            os_unfair_lock_unlock(&enabledLock)
+            return v
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "capsLockFastSwitch")
+            os_unfair_lock_lock(&enabledLock)
+            cachedCapsLockFastSwitch = newValue
             os_unfair_lock_unlock(&enabledLock)
             objectWillChange.send()
         }

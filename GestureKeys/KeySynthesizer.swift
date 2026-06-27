@@ -634,6 +634,8 @@ enum KeySynthesizer {
     private static var sourceIdToIndex: [String: Int] = [:]
     /// Lock protecting cached input source data.
     private static var inputSourceLock = os_unfair_lock()
+    /// Serializes TISSelectInputSource calls so two fast requests do not race.
+    private static var inputToggleLock = os_unfair_lock()
     /// Whether we registered for the input source change notification.
     private static var observingInputSourceChanges = false
     /// Observer token for input source change notification (for explicit removal).
@@ -785,6 +787,16 @@ enum KeySynthesizer {
     /// On failure (stale cache), invalidates and retries once.
     @discardableResult
     static func postToggleInputSource() -> Bool {
+        let startedAt = CFAbsoluteTimeGetCurrent()
+        os_unfair_lock_lock(&inputToggleLock)
+        defer {
+            os_unfair_lock_unlock(&inputToggleLock)
+            let elapsedMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
+            if elapsedMs > 80 {
+                NSLog("GestureKeys: Input source toggle took %.1f ms", elapsedMs)
+            }
+        }
+
         // Read cached sources
         os_unfair_lock_lock(&inputSourceLock)
         var sources = cachedSources

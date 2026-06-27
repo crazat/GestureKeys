@@ -23,7 +23,9 @@ private func touchCallback(
         os_unfair_lock_unlock(&engineLock)
         return
     }
-    engine.lastTouchCallbackTime = timestamp
+    // Record on systemUptime (not the MT frame timestamp) so device recovery can
+    // cross-reference it against lastTrackpadInputTime, which is also systemUptime.
+    engine.lastTouchCallbackTime = ProcessInfo.processInfo.systemUptime
     os_unfair_lock_unlock(&engineLock)
 
     let touches = rawTouches.assumingMemoryBound(to: MTTouch.self)
@@ -96,6 +98,14 @@ private func eventTapCallback(
     // Caps Lock → instant input source toggle (before typing suppression)
     if type == .flagsChanged && event.getIntegerValueField(.keyboardEventKeycode) == 0x39 {
         if GestureConfig.shared.capsLockInputSwitch {
+            // Fast path: when the IOHIDManager monitor is live it already toggled the
+            // input source on the raw key-down (no ~250ms debounce, no dropped fast
+            // taps). Here we only consume the delayed flagsChanged so the caps-lock
+            // effect is suppressed — toggling again would double-switch.
+            if CapsLockMonitor.shared.isRunning {
+                return nil
+            }
+            // Slow path (no Input Monitoring permission / fast switch off):
             // Detect flag STATE TRANSITION instead of time-based debounce.
             // Caps Lock is a toggle modifier: pressing it changes .maskAlphaShift,
             // but releasing does NOT change it. By only toggling on transitions,
@@ -144,7 +154,17 @@ private func eventTapCallback(
     // macOS generates scroll events from finger movement during 3-finger gestures,
     // and momentum scroll continues for up to ~2s after fingers lift.
     if type == .scrollWheel {
+        // Liveness probe: a continuous, non-momentum scroll means fingers are
+        // physically scrolling on the trackpad right now. If the MT contact
+        // callback is alive it MUST be firing concurrently — device recovery
+        // cross-references this against lastTouchCallbackTime to detect a dead
+        // MultitouchSupport callback thread while the device count is unchanged.
+        let isContinuousScroll = event.getIntegerValueField(.scrollWheelEventIsContinuous) != 0
+        let scrollMomentumPhase = event.getIntegerValueField(.scrollWheelEventMomentumPhase)
         os_unfair_lock_lock(&engineLock)
+        if isContinuousScroll && scrollMomentumPhase == 0 {
+            engine.lastTrackpadInputTime = ProcessInfo.processInfo.systemUptime
+        }
         let touchCount = engine.currentTouchCount
         let timeSinceSwipe = ProcessInfo.processInfo.systemUptime - engine.lastSwipeFireTime
         os_unfair_lock_unlock(&engineLock)
@@ -313,6 +333,11 @@ final class GestureEngine {
     private var eventTapRetryTimer: Timer?
     private var eventTapRetryCount = 0
     private let maxEventTapRetries = 5
+    private var pendingDeviceStartItem: DispatchWorkItem?
+    private var pendingEventTapRecoveryItem: DispatchWorkItem?
+    private var deviceStartGeneration = 0
+    private var eventTapRecoveryGeneration = 0
+    private var lastWakeRecoveryTime: TimeInterval = 0
 
     /// Activity token that prevents App Nap from throttling timers and callbacks.
     /// Without this, macOS suspends menu bar apps (LSUIElement, no visible windows)
@@ -368,6 +393,16 @@ final class GestureEngine {
     /// but count unchanged, or MultitouchSupport internal thread died).
     fileprivate var lastTouchCallbackTime: TimeInterval = 0
 
+    /// Timestamp of the last physical trackpad scroll seen by the EventTap (continuous,
+    /// non-momentum). Protected by engineLock. Proves the trackpad hardware is alive
+    /// independently of the MT contact callback — the cross-reference that detects a
+    /// dead MT callback thread without false-firing during idle.
+    fileprivate var lastTrackpadInputTime: TimeInterval = 0
+
+    /// Timestamp of the last device re-registration (cooldown to avoid tight re-register
+    /// loops when recovery doesn't immediately revive the callback). Protected by engineLock.
+    private var lastDeviceReregisterTime: TimeInterval = 0
+
     /// Prevents duplicate permission issue alerts.
     private var permissionIssuePosted = false
 
@@ -382,8 +417,14 @@ final class GestureEngine {
         // no visible windows) when idle, which throttles Timer firing and delays
         // EventTap callback processing. This causes tapDisabledByTimeout and
         // silently kills gesture recognition.
+        //
+        // Use `.userInitiatedAllowingIdleSystemSleep` rather than `.userInitiated`:
+        // the latter implies `.idleSystemSleepDisabled`, which would keep the Mac
+        // awake forever — wrong for a background gesture app. We allow the system to
+        // idle-sleep normally; sleep/wake recovery (handleWake + health check) brings
+        // gestures back afterward.
         appNapActivity = ProcessInfo.processInfo.beginActivity(
-            options: [.userInitiated, .idleSystemSleepDisabled],
+            options: [.userInitiatedAllowingIdleSystemSleep],
             reason: "GestureKeys must process trackpad events in real time"
         )
 
@@ -400,6 +441,7 @@ final class GestureEngine {
         observeScreenLock()
         KeySynthesizer.startObservingInputSourceChanges()
         KeySynthesizer.prewarmInputSourceCache()
+        CapsLockMonitor.shared.refresh()
 
         NSLog("GestureKeys: Engine started with %d device(s)", devices.count)
     }
@@ -421,9 +463,16 @@ final class GestureEngine {
         eventTapHealthTimer = nil
         eventTapRetryTimer?.invalidate()
         eventTapRetryTimer = nil
+        pendingDeviceStartItem?.cancel()
+        pendingDeviceStartItem = nil
+        pendingEventTapRecoveryItem?.cancel()
+        pendingEventTapRecoveryItem = nil
+        deviceStartGeneration += 1
+        eventTapRecoveryGeneration += 1
         // Order matters: remove event tap first so callbacks can't fire on stopped devices.
         removeEventTap()
         stopMultitouchDevices()
+        CapsLockMonitor.shared.stop()
         KeySynthesizer.invalidateInputSourceCache()
 
         os_unfair_lock_lock(&engineLock)
@@ -502,11 +551,15 @@ final class GestureEngine {
         // Without dedup, each reinstall tears down the working EventTap
         // and recreates it, causing brief gesture-dead gaps.
         let now = ProcessInfo.processInfo.systemUptime
+        os_unfair_lock_lock(&engineLock)
         if now - lastReinstallTime < 3.0 {
-            NSLog("GestureKeys: Skipping EventTap reinstall — cooldown active (%.1fs ago)", now - lastReinstallTime)
+            let elapsed = now - lastReinstallTime
+            os_unfair_lock_unlock(&engineLock)
+            NSLog("GestureKeys: Skipping EventTap reinstall — cooldown active (%.1fs ago)", elapsed)
             return
         }
         lastReinstallTime = now
+        os_unfair_lock_unlock(&engineLock)
 
         NSLog("GestureKeys: Attempting EventTap reinstall...")
         removeEventTap()
@@ -968,10 +1021,12 @@ final class GestureEngine {
 
             if retryCount <= maxEventTapRetries {
                 NSLog("GestureKeys: CGEventTap creation failed — retry %d/%d in 2s", retryCount, maxEventTapRetries)
-                eventTapRetryTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
+                let timer = Timer(timeInterval: 2.0, repeats: false) { [weak self] _ in
                     guard let self, self.isRunning else { return }
                     self.installEventTap()
                 }
+                RunLoop.main.add(timer, forMode: .common)
+                eventTapRetryTimer = timer
             } else {
                 NSLog("GestureKeys: CGEventTap creation failed after %d retries", maxEventTapRetries)
                 DispatchQueue.main.async {
@@ -1040,6 +1095,14 @@ final class GestureEngine {
             self, selector: #selector(handleWake),
             name: NSWorkspace.didWakeNotification, object: nil
         )
+        center.addObserver(
+            self, selector: #selector(handleWake),
+            name: NSWorkspace.screensDidWakeNotification, object: nil
+        )
+        center.addObserver(
+            self, selector: #selector(handleWake),
+            name: NSWorkspace.sessionDidBecomeActiveNotification, object: nil
+        )
     }
 
     /// Bundle IDs of system UI processes where gestures should be suppressed.
@@ -1071,43 +1134,73 @@ final class GestureEngine {
         lastExternalKeyTime = 0
         typingBurstActive = false
         keystrokeCount = 0
+        lastTouchCallbackTime = 0
+        lastTrackpadInputTime = 0
         os_unfair_lock_unlock(&engineLock)
     }
 
     @objc private func handleWake(_ notification: Notification) {
         guard isRunning else { return }
-        NSLog("GestureKeys: System woke — re-registering devices and re-enabling EventTap")
+        scheduleWakeRecovery(reason: notification.name.rawValue, deviceDelay: 1.5, eventTapDelay: 2.0)
+    }
 
-        // Reset recognizer state (stale from before sleep)
+    private func scheduleWakeRecovery(reason: String, deviceDelay: TimeInterval, eventTapDelay: TimeInterval) {
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - lastWakeRecoveryTime < 2.0 {
+            NSLog("GestureKeys: Skipping duplicate wake recovery for %@ (%.1fs ago)", reason, now - lastWakeRecoveryTime)
+            return
+        }
+        lastWakeRecoveryTime = now
+
+        NSLog("GestureKeys: Wake recovery scheduled for %@", reason)
+        clearStaleMultitouchRegistrations(resetRecognizers: true)
+        scheduleDeviceStart(after: deviceDelay, reason: reason)
+        scheduleEventTapRecovery(after: eventTapDelay, reason: reason)
+    }
+
+    private func clearStaleMultitouchRegistrations(resetRecognizers: Bool) {
         os_unfair_lock_lock(&engineLock)
-        resetAllRecognizers()
+        if resetRecognizers {
+            resetAllRecognizers()
+        }
+        lastTouchCallbackTime = 0
+        lastTrackpadInputTime = 0
         os_unfair_lock_unlock(&engineLock)
 
-        // Unregister callbacks but do NOT call MTDeviceStop on potentially stale handles.
-        // After sleep, MultitouchSupport's internal thread (mt_ThreadedMTEntry) may
-        // concurrently release devices via __MTDeviceRelease → MTDeviceStop. Calling
-        // MTDeviceStop ourselves races with that cleanup: the first stop NULLs an
-        // internal field, and the second CFRelease(NULL) → EXC_BREAKPOINT crash.
+        // Do not call MTDeviceStop on potentially stale handles after sleep.
         for device in devices {
             MTUnregisterContactFrameCallback(device, touchCallback)
         }
         devices.removeAll()
+    }
 
-        // Wait for MultitouchSupport's internal threads to fully settle, then
-        // create fresh device handles via MTDeviceCreateList.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            guard let self, self.isRunning else { return }
+    private func scheduleDeviceStart(after delay: TimeInterval, reason: String) {
+        pendingDeviceStartItem?.cancel()
+        deviceStartGeneration += 1
+        let generation = deviceStartGeneration
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, self.isRunning, generation == self.deviceStartGeneration else { return }
             self.startMultitouchDevices()
-            NSLog("GestureKeys: Re-registered %d multitouch device(s) after wake", self.devices.count)
+            NSLog("GestureKeys: Re-registered %d multitouch device(s) after %@", self.devices.count, reason)
         }
+        pendingDeviceStartItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
+    }
 
-        // Fully reinstall EventTap after wake. macOS may have invalidated
-        // the Mach port during sleep, making re-enable alone insufficient.
-        // Delay slightly to let the system settle after wake.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-            guard let self, self.isRunning else { return }
+    private func scheduleEventTapRecovery(after delay: TimeInterval, reason: String) {
+        pendingEventTapRecoveryItem?.cancel()
+        eventTapRecoveryGeneration += 1
+        let generation = eventTapRecoveryGeneration
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, self.isRunning, generation == self.eventTapRecoveryGeneration else { return }
             self.reinstallEventTap()
+            KeySynthesizer.prewarmInputSourceCache()
+            CapsLockMonitor.shared.stop()
+            CapsLockMonitor.shared.refresh()
+            NSLog("GestureKeys: EventTap/InputSource recovery finished after %@", reason)
         }
+        pendingEventTapRecoveryItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
     }
 
     // MARK: - Screen Lock / Unlock
@@ -1128,30 +1221,7 @@ final class GestureEngine {
 
     @objc private func handleScreenUnlocked(_ notification: Notification) {
         guard isRunning else { return }
-        NSLog("GestureKeys: Screen unlocked — verifying EventTap and devices")
-
-        // Re-enable or reinstall EventTap (may have been disabled during lock)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-            guard let self, self.isRunning else { return }
-
-            os_unfair_lock_lock(&engineLock)
-            let tap = self.eventTap
-            let active = self.eventTapActive
-            os_unfair_lock_unlock(&engineLock)
-
-            if let tap, active {
-                if !CFMachPortIsValid(tap) || !CGEvent.tapIsEnabled(tap: tap) {
-                    NSLog("GestureKeys: EventTap dead after screen unlock — reinstalling")
-                    self.reinstallEventTap()
-                } else {
-                    // Proactively re-enable even if it looks valid
-                    CGEvent.tapEnable(tap: tap, enable: true)
-                }
-            } else if active {
-                // eventTap is nil but should be active
-                self.reinstallEventTap()
-            }
-        }
+        scheduleWakeRecovery(reason: notification.name.rawValue, deviceDelay: 1.0, eventTapDelay: 1.0)
     }
 
     // MARK: - EventTap Health Check
@@ -1161,7 +1231,9 @@ final class GestureEngine {
     /// a tap (tapDisabledByTimeout) without invalidating the port — the previous
     /// check only caught port invalidation, missing the disabled-but-valid case.
     private func startEventTapHealthCheck() {
-        eventTapHealthTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+        // Run in .commonModes so the watchdog keeps firing during tracking run
+        // loops (open menus, modal panels) — .default-mode timers stall there.
+        let timer = Timer(timeInterval: 5.0, repeats: true) { [weak self] _ in
             guard let self, self.isRunning else { return }
             os_unfair_lock_lock(&engineLock)
             let tap = self.eventTap
@@ -1169,17 +1241,15 @@ final class GestureEngine {
             os_unfair_lock_unlock(&engineLock)
 
             guard active, let tap = tap else {
-                // If EventTap is not active and permission was previously reported as
-                // lost, check if accessibility permission has been restored. If so,
-                // attempt automatic recovery without requiring manual toggle.
-                os_unfair_lock_lock(&engineLock)
-                let wasPermissionIssue = self.permissionIssuePosted
-                os_unfair_lock_unlock(&engineLock)
-                if wasPermissionIssue && AXIsProcessTrusted() {
-                    NSLog("GestureKeys: Accessibility permission restored — attempting auto-recovery")
+                // Tap is down. If accessibility permission is present, revive it.
+                // This covers every way the tap can end up dead-but-unreported:
+                // exhausted install retries, a failed reinstall, or permission just
+                // restored — no manual off/on toggle required.
+                if AXIsProcessTrusted() {
                     os_unfair_lock_lock(&engineLock)
                     self.permissionIssuePosted = false
                     os_unfair_lock_unlock(&engineLock)
+                    NSLog("GestureKeys: Health check found EventTap inactive with valid permission — reinstalling")
                     self.reinstallEventTap()
                 }
                 return
@@ -1198,12 +1268,15 @@ final class GestureEngine {
                 }
             }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        eventTapHealthTimer = timer
     }
 
     // MARK: - Device Recovery
 
     private func startDeviceRecovery() {
-        deviceRecoveryTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+        // .commonModes so recovery survives tracking run loops (see health check).
+        let timer = Timer(timeInterval: 5.0, repeats: true) { [weak self] _ in
             guard let self, self.isRunning else { return }
             // MTDeviceCreateList() returns a CFArray?. In Swift, it's automatically
             // managed via toll-free bridging. The local binding ensures ARC releases
@@ -1211,26 +1284,56 @@ final class GestureEngine {
             guard let rawList = MTDeviceCreateList() else { return }
             let currentCount = CFArrayGetCount(rawList)
 
+            // 1) Device count changed (connect/disconnect): re-register.
             // Note: OpaquePointer comparison is unreliable here — MTDeviceCreateList()
             // may return new wrapper objects for the same physical device each call.
-            // Only use device count changes as the trigger for re-registration.
-
+            // Only use device count changes as the trigger for this path.
             if currentCount != self.devices.count {
                 NSLog("GestureKeys: Device count changed (%d → %ld), re-registering", self.devices.count, currentCount)
-                os_unfair_lock_lock(&engineLock)
-                self.resetAllRecognizers()
-                os_unfair_lock_unlock(&engineLock)
-                // Unregister callbacks without MTDeviceStop — device handles may
-                // be stale if a device was disconnected (same race as handleWake).
-                for device in self.devices {
-                    MTUnregisterContactFrameCallback(device, touchCallback)
-                }
-                self.devices.removeAll()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                    guard let self, self.isRunning else { return }
-                    self.startMultitouchDevices()
-                }
+                self.reregisterDevices()
+                return
             }
+
+            // 2) Silent MT callback death (count unchanged). The documented failure
+            //    mode: the MultitouchSupport contact callback stops firing after long
+            //    uptime / sleep cycles while the device list looks unchanged. Detect
+            //    it two independent ways:
+            //    (a) a registered device reports it is no longer running, OR
+            //    (b) the trackpad is physically active right now (continuous scroll
+            //        seen by the EventTap) yet no contact frame has arrived — the
+            //        callback thread is dead while the hardware is alive.
+            let now = ProcessInfo.processInfo.systemUptime
+            os_unfair_lock_lock(&engineLock)
+            let lastCb = self.lastTouchCallbackTime
+            let lastInput = self.lastTrackpadInputTime
+            let lastReregister = self.lastDeviceReregisterTime
+            os_unfair_lock_unlock(&engineLock)
+
+            let callbackSilentDuringInput = lastInput > 0
+                && (now - lastInput) < 3.0
+                && (lastCb == 0 || lastInput - lastCb > 2.5)
+            let deviceStopped = !self.devices.isEmpty
+                && self.devices.contains { !MTDeviceIsRunning($0) }
+
+            guard callbackSilentDuringInput || deviceStopped else { return }
+            // Cooldown: don't tear down repeatedly while recovery settles.
+            guard now - lastReregister > 10.0 else { return }
+            NSLog("GestureKeys: MT callback appears dead (stopped=%@, silentDuringInput=%@) — re-registering",
+                  deviceStopped ? "yes" : "no", callbackSilentDuringInput ? "yes" : "no")
+            self.reregisterDevices()
         }
+        RunLoop.main.add(timer, forMode: .common)
+        deviceRecoveryTimer = timer
+    }
+
+    /// Tears down stale device registrations and recreates them after a short settle
+    /// delay. Shared by the count-change and callback-death recovery paths.
+    /// Must be called on the main thread (mutates `devices`).
+    private func reregisterDevices() {
+        os_unfair_lock_lock(&engineLock)
+        lastDeviceReregisterTime = ProcessInfo.processInfo.systemUptime
+        os_unfair_lock_unlock(&engineLock)
+        clearStaleMultitouchRegistrations(resetRecognizers: true)
+        scheduleDeviceStart(after: 1.5, reason: "device recovery")
     }
 }

@@ -19,7 +19,7 @@ open ~/Applications/GestureKeys.app
 
 **중요:** 항상 `~/Applications/GestureKeys.app`에서 실행해야 SMAppService 로그인 항목이 올바른 경로를 가리킴. DerivedData나 .build에서 직접 실행하면 로그인 시 옛 빌드가 실행될 수 있음.
 
-**요구사항:** Accessibility 권한 필요 (시스템 설정 → 개인정보 보호 → 손쉬운 사용)
+**요구사항:** Accessibility 권한 필요 (시스템 설정 → 개인정보 보호 → 손쉬운 사용). **선택**: Caps Lock "빠른 인식" 사용 시 Input Monitoring(입력 모니터링) 권한 추가 필요.
 
 **참고:** Apple Development 인증서로 서명하므로 재빌드해도 접근성 권한이 유지됨. 최초 1회만 손쉬운 사용에서 허용하면 됨. 앱은 권한 미부여 시 1초 간격으로 폴링하여 권한 부여 즉시 엔진을 시작함.
 
@@ -85,7 +85,8 @@ GestureKeys/
     ├── GestureEngine.swift              # 터치 처리 허브 (18개 인식기 관리, 히트맵 기록)
     ├── GestureConfig.swift              # 제스처 활성화/비활성화/쿨다운/존/Shortcuts (UserDefaults)
     ├── KeySynthesizer.swift             # CGEvent 키 합성 + 시스템 키 + osascript + pmset + Shortcuts + 쿨다운
-    ├── MultitouchBindings.swift         # MultitouchSupport.framework 바인딩
+    ├── CapsLockMonitor.swift            # IOHIDManager raw Caps Lock 캡처 (250ms 딜레이 우회, 입력 모니터링 권한)
+    ├── MultitouchBindings.swift         # MultitouchSupport.framework 바인딩 (MTDeviceIsRunning 포함)
     ├── TouchModels.swift                # MTTouch 구조체 (96 bytes) + TrackpadZone
     │
     ├── SettingsMigration.swift          # 설정 스키마 버전 관리 & 순차 마이그레이션
@@ -190,8 +191,10 @@ AXIsProcessTrusted() → engine.start() or 폴링
 - `enabledLock`: `GestureConfig.enabledCache` + `cachedFrontmostBundleId` 보호 (터치 콜백 읽기 ↔ UI 쓰기)
 - `appOverridesLock`: 앱별 오버라이드 캐시 보호
 - `inputSourceLock`: `KeySynthesizer.cachedSources`/`sourceIdToIndex` 보호 (EventTap 콜백 읽기 ↔ 알림 콜백 무효화)
+- `inputToggleLock`: `TISSelectInputSource` 전환 직렬화 (Caps Lock raw HID + EventTap fallback/제스처 액션 중복 요청 race 방지)
 - `GestureStats.lock`: 통계 레코드 + 최근 제스처 링 버퍼 읽기/쓰기 보호
 - `MacroEngine.macrosLock`: 매크로 캐시 보호 (메인 스레드 쓰기 ↔ 터치 콜백 읽기)
+- `CapsLockMonitor.lock`: IOHIDManager 인스턴스 + `_running` 플래그 + `lastCapsDownTime` 보호 (EventTap 콜백 읽기 ↔ start/stop 쓰기, 중복 raw key-down 억제)
 - **지연 실행 패턴**: `fireAction()`이 `pendingActions`에 클로저 버퍼링 (engineLock 하), lock 해제 후 실행. CGEvent 포스팅이 lock 밖에서 실행되어 lock 점유 시간 최소화
 - UI 쓰기는 메인 스레드 (@Published + SwiftUI)
 - `cachedHudEnabled`/`cachedHapticEnabled`/`actionCache`: 인메모리 캐시로 UserDefaults I/O 제거
@@ -306,9 +309,11 @@ final class XxxRecognizer {
 - **통계**: `GestureStats.shared` 일별 집계 30일 보관, `StatsView` 대시보드 + 추천 ("끄기" 액션 버튼). 최근 5개 제스처 링 버퍼 (`recentGestureNames()`). 일 평균 실제 데이터 일수 기반 (`daysWithData()`).
 - **크래시 리포팅**: `CrashReporter` → `~/Library/Logs/GestureKeys/crash.log`
 - **설정 마이그레이션**: `SettingsMigration` 순차 체인, `currentVersion` 범프로 스키마 변경 대응
-- **Caps Lock 한영전환**: EventTap에서 Caps Lock(0x39) 인터셉트 → Carbon TIS API로 즉시 입력 소스 전환. `GestureConfig.capsLockInputSwitch` 토글. **플래그 상태 변화 감지**: `.maskAlphaShift` 플래그 전환 시에만 토글 (key-up 이벤트 자연 무시, 홀드 시간 무관). 전환이 성공한 경우에만 마지막 Caps Lock 플래그 상태를 확정하고, 실패 시 `nil`로 되돌려 다음 Caps 이벤트에서 재시도한다. **주의**: macOS 시스템 설정의 "Caps Lock으로 입력 소스 전환"은 꺼야 이중 전환 방지. **참고**: Apple 내장 키보드는 Caps Lock에 ~250ms 하드웨어 딜레이가 있어 매우 빠른 탭은 감지 안 될 수 있음 (IOHIDManager로 우회 가능하나 Input Monitoring 권한 필요).
+- **Caps Lock 한영전환**: EventTap에서 Caps Lock(0x39) 인터셉트 → Carbon TIS API로 즉시 입력 소스 전환. `GestureConfig.capsLockInputSwitch` 토글. **플래그 상태 변화 감지**: `.maskAlphaShift` 플래그 전환 시에만 토글 (key-up 이벤트 자연 무시, 홀드 시간 무관). 전환이 성공한 경우에만 마지막 Caps Lock 플래그 상태를 확정하고, 실패 시 `nil`로 되돌려 다음 Caps 이벤트에서 재시도한다. **주의**: macOS 시스템 설정의 "Caps Lock으로 입력 소스 전환"은 꺼야 이중 전환 방지.
+  - **빠른 인식 (IOHIDManager 경로)**: Apple 내장 키보드는 Caps Lock에 ~250ms 하드웨어 디바운스가 있어 빠른 탭이 flagsChanged로 도달조차 못 함 ("눌렀는데 안 바뀜"). `GestureConfig.capsLockFastSwitch` ON 시 `CapsLockMonitor`(IOHIDManager)가 **raw HID 레벨**에서 Caps Lock key-down을 즉시 캡처해 디바운스를 우회 → 빠른 탭도 100% 인식 + 첫 글자 race도 동시 해소. **Input Monitoring(입력 모니터링) 권한 필요** (`IOHIDCheckAccess`/`IOHIDRequestAccess`, `kIOHIDRequestTypeListenEvent`). 권한 변경은 앱 재시작 권장.
+  - **EventTap 협응**: 빠른 인식 활성(`CapsLockMonitor.shared.isRunning == true`) 시 EventTap의 Caps 분기는 *consume만* 하고 토글하지 않음 (IOHID가 이미 key-down에 토글했으므로 이중 전환 방지). 권한 미부여/빠른 인식 OFF면 기존 flagsChanged 전환 감지 경로로 폴백. 모니터는 메인 런루프 `.commonModes`에 스케줄, 키보드만 device-match + Caps Lock element만 value-match. 일부 키보드의 중복 raw key-down은 `duplicatePressWindow` 80ms로 억제한다.
   - **캐싱**: `TISCreateInputSourceList` 결과를 캐시 (`cachedSources`/`sourceIdToIndex`). `kTISNotifyEnabledKeyboardInputSourcesChanged` 알림으로 자동 무효화. O(1) 해시맵 룩업. 엔진 시작 시 `prewarmInputSourceCache()`로 캐시 프리워밍. observer 등록/해제 상태도 `inputSourceLock`으로 보호한다.
-  - **동기 실행**: EventTap 콜백에서 동기 실행하여 전환 완료 전에 다음 키 이벤트가 처리되지 않도록 보장 (영→한 첫 글자 race 방지). 캐시 히트 시 ~6-25ms.
+  - **동기 실행/직렬화**: EventTap/HID 콜백에서 동기 실행하여 전환 완료 전에 다음 키 이벤트가 처리되지 않도록 보장 (영→한 첫 글자 race 방지). `inputToggleLock`으로 `TISSelectInputSource` 호출을 직렬화한다. 캐시 히트 시 ~6-25ms, 80ms 이상 소요되면 로그를 남긴다.
   - **소스 선택**: 현재 입력 소스 ID가 캐시에 없으면 `kTISPropertyInputSourceIsSelected`와 Korean/ASCII 판별을 fallback으로 사용한다. ABC ↔ 2-Set Korean처럼 한영 쌍이 있으면 임의 순환보다 한글/영문 타깃을 우선한다.
   - **실패 복구**: `TISSelectInputSource` 실패 시 캐시 무효화 + 1회 재시도. 실패 여부를 `Bool`로 반환하여 Caps Lock 이벤트 상태 기록과 재시도 여부에 반영한다. 엔진 stop 시 캐시 정리 (`invalidateInputSourceCache()`).
 - **한영전환 액션**: `KeySynthesizer.Action.toggleInputSource` — 어떤 제스처든 한영전환에 매핑 가능
@@ -384,19 +389,20 @@ macOS가 잠자기/화면잠금/시스템 부하/유휴 상태 등으로 CGEvent
 3. 화면 잠금 ≠ Sleep: 화면잠금(Ctrl+Cmd+Q, 스크린세이버)은 `willSleepNotification`을 발생시키지 않아 복구 로직 미실행
 **해결** (9단계):
 1. `removeEventTap()`에서 `CFMachPortInvalidate(tap)` 추가 — 시스템 레벨 이벤트 탭 등록을 완전 해제
-2. `handleWake()`에서 `reEnableEventTap()` → `reinstallEventTap()`으로 변경 — 이벤트 탭 완전 재생성 (2초 딜레이)
-3. `startEventTapHealthCheck()` — 5초 주기로 `CFMachPortIsValid()` + `CGEvent.tapIsEnabled(tap:)` 확인, 무효화 또는 비활성화 시 자동 reinstall/re-enable
-4. `ProcessInfo.processInfo.beginActivity(options:reason:)` — App Nap 방지. 엔진 start 시 활성화, stop 시 해제
-5. `observeScreenLock()` — `DistributedNotificationCenter`로 `com.apple.screenIsUnlocked` 감시, 화면 해제 시 EventTap 상태 확인 및 복구
+2. `handleWake()`에서 `reEnableEventTap()` → `scheduleWakeRecovery()`로 변경 — MT 콜백 재등록 + EventTap 완전 재생성 (2초 딜레이). 동시에 `CapsLockMonitor` 신선 재시작 (sleep 후 HID 핸들 stale 방지). `didWake`뿐 아니라 `screensDidWake`/`sessionDidBecomeActive`/screen unlock도 같은 복구 경로를 탄다.
+3. `startEventTapHealthCheck()` — 5초 주기로 `CFMachPortIsValid()` + `CGEvent.tapIsEnabled(tap:)` 확인, 무효화 또는 비활성화 시 자동 reinstall/re-enable. **`.commonModes` 타이머**라 메뉴/모달 트래킹 루프 중에도 동작. **워치독 강화**: 탭이 inactive인데 `AXIsProcessTrusted()`면 (재설치 실패/재시도 소진/권한 복원 등 모든 dead 경로) 무조건 reinstall 시도
+4. `ProcessInfo.processInfo.beginActivity(options:reason:)` — App Nap 방지. **`.userInitiatedAllowingIdleSystemSleep`** 사용 (`.userInitiated`는 idle system sleep까지 막아 맥이 영영 안 자는 부작용 — 백그라운드 제스처 앱엔 부적절). App Nap만 막고 유휴 절전은 정상 허용. 엔진 start 시 활성화, stop 시 해제
+5. `observeScreenLock()` — `DistributedNotificationCenter`로 `com.apple.screenIsUnlocked` 감시, 화면 해제 시 `scheduleWakeRecovery()` 실행. `pendingDeviceStartItem`/`pendingEventTapRecoveryItem` + generation guard로 중복 wake/unlock 복구 작업을 취소/무시한다.
 6. 헬스체크에서 `CGEvent.tapIsEnabled(tap:)` 추가 확인 — Mach port는 유효하지만 탭이 disabled인 사각지대 해소
-7. 멀티터치 콜백 생존 감지 — `lastTouchCallbackTime` 추적, 30초간 콜백 없으면 디바이스 자동 재등록
+7. **멀티터치 콜백 생존 감지 (실구현)** — `startDeviceRecovery()` (5초, `.commonModes`)에서 디바이스 *개수 불변*인데 콜백이 죽은 케이스를 2중으로 감지: **(a)** `MTDeviceIsRunning()`이 false (디바이스 정지), **(b)** EventTap이 본 *연속 스크롤*(`scrollWheelEventIsContinuous`, momentumPhase 0 = 손가락 물리 스크롤)로 트랙패드는 살아있는데 `lastTouchCallbackTime`이 2.5s+ 정체 (콜백 스레드 death). 둘 중 하나면 `reregisterDevices()` (10초 쿨다운). `lastTouchCallbackTime`/`lastTrackpadInputTime` 모두 `systemUptime` 클럭으로 통일해 교차 비교 유효. **주의**: 과거 이 단계는 문서에만 있고 미구현이었음 (개수 체크만 존재)
 8. 접근성 권한 자동 복구 — 헬스체크에서 `AXIsProcessTrusted()` 감시, 권한 복원 시 자동 `reinstallEventTap()`
 9. `eventTapRestoredNotification` — EventTap 복구 성공 시 메뉴바 아이콘 자동 복원
 
 ## 의존성
 
-- **MultitouchSupport.framework** (Apple private) — `@_silgen_name` 바인딩
+- **MultitouchSupport.framework** (Apple private) — `@_silgen_name` 바인딩 (`MTDeviceCreateList`/`Start`/`Stop`/`IsRunning`, 콜백 등록)
 - **Carbon.HIToolbox** (Apple) — TIS API (입력 소스 전환)
+- **IOKit.hid** (Apple) — IOHIDManager raw Caps Lock 캡처 (`CapsLockMonitor`, Input Monitoring 권한)
 - **ServiceManagement** (Apple) — `SMAppService` 로그인 시 자동 시작 (macOS 13+)
 - **Sparkle 2** (외부) — 자동 업데이트 (Ed25519 서명, SPM 의존성)
 - 기타 외부 라이브러리 없음

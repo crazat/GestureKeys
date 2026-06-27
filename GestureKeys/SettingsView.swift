@@ -204,7 +204,13 @@ struct SettingsView: View {
                 HStack(spacing: 12) {
                     Toggle("", isOn: Binding(
                         get: { config.capsLockInputSwitch },
-                        set: { config.capsLockInputSwitch = $0 }
+                        set: { newVal in
+                            config.capsLockInputSwitch = newVal
+                            if newVal && config.capsLockFastSwitch && !CapsLockMonitor.accessGranted() {
+                                CapsLockMonitor.requestAccess()
+                            }
+                            CapsLockMonitor.shared.refresh()
+                        }
                     ))
                     .toggleStyle(.switch)
                     .controlSize(.small)
@@ -221,6 +227,38 @@ struct SettingsView: View {
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
+
+                // Sub-option: raw HID capture to bypass the built-in keyboard's
+                // ~250ms Caps Lock debounce (fixes dropped fast taps).
+                HStack(spacing: 12) {
+                    Toggle("", isOn: Binding(
+                        get: { config.capsLockFastSwitch },
+                        set: { newVal in
+                            config.capsLockFastSwitch = newVal
+                            if newVal && !CapsLockMonitor.accessGranted() {
+                                CapsLockMonitor.requestAccess()
+                            }
+                            CapsLockMonitor.shared.refresh()
+                        }
+                    ))
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .disabled(!config.capsLockInputSwitch)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("빠른 인식 (입력 모니터링 권한)")
+                            .font(.body)
+                        Text("내장 키보드의 Caps Lock ~250ms 딜레이를 우회해 빠른 탭도 놓치지 않습니다. 권한 허용 후 앱 재시작을 권장합니다.")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+
+                    Spacer()
+                }
+                .padding(.leading, 44)
+                .padding(.trailing, 12)
+                .padding(.vertical, 8)
+                .opacity(config.capsLockInputSwitch ? 1 : 0.5)
 
                 Divider().padding(.leading, 44)
 

@@ -27,6 +27,11 @@ func MTDeviceStart(_ device: MTDeviceRef, _ mode: Int32) -> Int32
 @_silgen_name("MTDeviceStop")
 func MTDeviceStop(_ device: MTDeviceRef) -> Int32
 
+/// Returns whether the device is currently started and delivering contact frames.
+/// Used by device recovery to detect a silently-stopped device (count unchanged).
+@_silgen_name("MTDeviceIsRunning")
+func MTDeviceIsRunning(_ device: MTDeviceRef) -> Bool
+
 // MARK: - Callback Registration
 
 @_silgen_name("MTRegisterContactFrameCallback")
