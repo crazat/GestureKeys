@@ -337,7 +337,7 @@ final class GestureEngine {
     private var pendingEventTapRecoveryItem: DispatchWorkItem?
     private var deviceStartGeneration = 0
     private var eventTapRecoveryGeneration = 0
-    private var lastWakeRecoveryTime: TimeInterval = 0
+    private var lastSystemWakeRecoveryTime: TimeInterval = 0
 
     /// Activity token that prevents App Nap from throttling timers and callbacks.
     /// Without this, macOS suspends menu bar apps (LSUIElement, no visible windows)
@@ -1096,11 +1096,11 @@ final class GestureEngine {
             name: NSWorkspace.didWakeNotification, object: nil
         )
         center.addObserver(
-            self, selector: #selector(handleWake),
+            self, selector: #selector(handleSessionResume),
             name: NSWorkspace.screensDidWakeNotification, object: nil
         )
         center.addObserver(
-            self, selector: #selector(handleWake),
+            self, selector: #selector(handleSessionResume),
             name: NSWorkspace.sessionDidBecomeActiveNotification, object: nil
         )
     }
@@ -1129,6 +1129,17 @@ final class GestureEngine {
 
     @objc private func handleSleep(_ notification: Notification) {
         NSLog("GestureKeys: System going to sleep — resetting recognizers")
+
+        // A recovery queued immediately before sleep must not run against device
+        // handles that are becoming stale. The real wake notification schedules
+        // fresh work after MultitouchSupport has settled.
+        pendingDeviceStartItem?.cancel()
+        pendingDeviceStartItem = nil
+        pendingEventTapRecoveryItem?.cancel()
+        pendingEventTapRecoveryItem = nil
+        deviceStartGeneration += 1
+        eventTapRecoveryGeneration += 1
+
         os_unfair_lock_lock(&engineLock)
         resetAllRecognizers()
         lastExternalKeyTime = 0
@@ -1141,21 +1152,35 @@ final class GestureEngine {
 
     @objc private func handleWake(_ notification: Notification) {
         guard isRunning else { return }
-        scheduleWakeRecovery(reason: notification.name.rawValue, deviceDelay: 1.5, eventTapDelay: 2.0)
+        scheduleSystemWakeRecovery(reason: notification.name.rawValue)
     }
 
-    private func scheduleWakeRecovery(reason: String, deviceDelay: TimeInterval, eventTapDelay: TimeInterval) {
+    /// Recovers both MultitouchSupport and the EventTap after an actual system
+    /// sleep. Device handles may be stale here, so they are discarded without
+    /// calling MTDeviceStop (which can race MultitouchSupport's wake cleanup).
+    private func scheduleSystemWakeRecovery(reason: String) {
         let now = ProcessInfo.processInfo.systemUptime
-        if now - lastWakeRecoveryTime < 2.0 {
-            NSLog("GestureKeys: Skipping duplicate wake recovery for %@ (%.1fs ago)", reason, now - lastWakeRecoveryTime)
+        if now - lastSystemWakeRecoveryTime < 2.0 {
+            NSLog("GestureKeys: Skipping duplicate system-wake recovery for %@ (%.1fs ago)",
+                  reason, now - lastSystemWakeRecoveryTime)
             return
         }
-        lastWakeRecoveryTime = now
+        lastSystemWakeRecoveryTime = now
 
-        NSLog("GestureKeys: Wake recovery scheduled for %@", reason)
+        NSLog("GestureKeys: System-wake recovery scheduled for %@", reason)
         clearStaleMultitouchRegistrations(resetRecognizers: true)
-        scheduleDeviceStart(after: deviceDelay, reason: reason)
-        scheduleEventTapRecovery(after: eventTapDelay, reason: reason)
+        scheduleDeviceStart(after: 1.5, reason: reason)
+        scheduleEventTapRecovery(after: 2.0, reason: reason)
+    }
+
+    /// Screen wake/session activation is not proof that the Mac slept. Restarting
+    /// MultitouchSupport for these notifications leaks an internal MT worker thread
+    /// on every lock/unlock cycle because the still-live device is never stopped.
+    /// The device watchdog separately handles a genuinely dead contact callback.
+    private func scheduleSessionResumeRecovery(reason: String) {
+        guard isRunning else { return }
+        NSLog("GestureKeys: Session-resume recovery scheduled for %@", reason)
+        scheduleEventTapRecovery(after: 1.0, reason: reason)
     }
 
     private func clearStaleMultitouchRegistrations(resetRecognizers: Bool) {
@@ -1220,8 +1245,11 @@ final class GestureEngine {
     }
 
     @objc private func handleScreenUnlocked(_ notification: Notification) {
-        guard isRunning else { return }
-        scheduleWakeRecovery(reason: notification.name.rawValue, deviceDelay: 1.0, eventTapDelay: 1.0)
+        scheduleSessionResumeRecovery(reason: notification.name.rawValue)
+    }
+
+    @objc private func handleSessionResume(_ notification: Notification) {
+        scheduleSessionResumeRecovery(reason: notification.name.rawValue)
     }
 
     // MARK: - EventTap Health Check

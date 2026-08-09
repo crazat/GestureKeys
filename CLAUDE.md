@@ -389,10 +389,10 @@ macOS가 잠자기/화면잠금/시스템 부하/유휴 상태 등으로 CGEvent
 3. 화면 잠금 ≠ Sleep: 화면잠금(Ctrl+Cmd+Q, 스크린세이버)은 `willSleepNotification`을 발생시키지 않아 복구 로직 미실행
 **해결** (9단계):
 1. `removeEventTap()`에서 `CFMachPortInvalidate(tap)` 추가 — 시스템 레벨 이벤트 탭 등록을 완전 해제
-2. `handleWake()`에서 `reEnableEventTap()` → `scheduleWakeRecovery()`로 변경 — MT 콜백 재등록 + EventTap 완전 재생성 (2초 딜레이). 동시에 `CapsLockMonitor` 신선 재시작 (sleep 후 HID 핸들 stale 방지). `didWake`뿐 아니라 `screensDidWake`/`sessionDidBecomeActive`/screen unlock도 같은 복구 경로를 탄다.
+2. 실제 시스템 절전 복구와 화면/세션 복귀를 분리 — `didWake`의 `scheduleSystemWakeRecovery()`만 MT 콜백을 재등록하고 EventTap을 완전 재생성한다. `screensDidWake`/`sessionDidBecomeActive`/screen unlock은 EventTap·입력 소스만 복구한다. 단순 잠금 해제마다 정상 MT 디바이스를 재시작할 때 내부 worker thread가 누적되는 문제를 방지한다.
 3. `startEventTapHealthCheck()` — 5초 주기로 `CFMachPortIsValid()` + `CGEvent.tapIsEnabled(tap:)` 확인, 무효화 또는 비활성화 시 자동 reinstall/re-enable. **`.commonModes` 타이머**라 메뉴/모달 트래킹 루프 중에도 동작. **워치독 강화**: 탭이 inactive인데 `AXIsProcessTrusted()`면 (재설치 실패/재시도 소진/권한 복원 등 모든 dead 경로) 무조건 reinstall 시도
 4. `ProcessInfo.processInfo.beginActivity(options:reason:)` — App Nap 방지. **`.userInitiatedAllowingIdleSystemSleep`** 사용 (`.userInitiated`는 idle system sleep까지 막아 맥이 영영 안 자는 부작용 — 백그라운드 제스처 앱엔 부적절). App Nap만 막고 유휴 절전은 정상 허용. 엔진 start 시 활성화, stop 시 해제
-5. `observeScreenLock()` — `DistributedNotificationCenter`로 `com.apple.screenIsUnlocked` 감시, 화면 해제 시 `scheduleWakeRecovery()` 실행. `pendingDeviceStartItem`/`pendingEventTapRecoveryItem` + generation guard로 중복 wake/unlock 복구 작업을 취소/무시한다.
+5. `observeScreenLock()` — `DistributedNotificationCenter`로 `com.apple.screenIsUnlocked` 감시, 화면 해제 시 `scheduleSessionResumeRecovery()` 실행. `pendingDeviceStartItem`/`pendingEventTapRecoveryItem` + generation guard로 중복 복구 작업을 취소/무시하고, 절전 진입 시 이미 예약된 작업도 취소한다.
 6. 헬스체크에서 `CGEvent.tapIsEnabled(tap:)` 추가 확인 — Mach port는 유효하지만 탭이 disabled인 사각지대 해소
 7. **멀티터치 콜백 생존 감지 (실구현)** — `startDeviceRecovery()` (5초, `.commonModes`)에서 디바이스 *개수 불변*인데 콜백이 죽은 케이스를 2중으로 감지: **(a)** `MTDeviceIsRunning()`이 false (디바이스 정지), **(b)** EventTap이 본 *연속 스크롤*(`scrollWheelEventIsContinuous`, momentumPhase 0 = 손가락 물리 스크롤)로 트랙패드는 살아있는데 `lastTouchCallbackTime`이 2.5s+ 정체 (콜백 스레드 death). 둘 중 하나면 `reregisterDevices()` (10초 쿨다운). `lastTouchCallbackTime`/`lastTrackpadInputTime` 모두 `systemUptime` 클럭으로 통일해 교차 비교 유효. **주의**: 과거 이 단계는 문서에만 있고 미구현이었음 (개수 체크만 존재)
 8. 접근성 권한 자동 복구 — 헬스체크에서 `AXIsProcessTrusted()` 감시, 권한 복원 시 자동 `reinstallEventTap()`
